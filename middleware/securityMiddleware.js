@@ -70,8 +70,8 @@ const handleCSRFError = (err, req, res, next) => {
 const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
     res.cookie("XSRF-TOKEN", req.csrfToken(), {
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      secure: process.env.NODE_ENV === "production", // Secure in production, not in dev
+      sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax", // Strict in prod, lax in dev
       httpOnly: false, // Allow JavaScript access for CSRF token
     });
   }
