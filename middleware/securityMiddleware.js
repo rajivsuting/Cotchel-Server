@@ -70,7 +70,8 @@ const handleCSRFError = (err, req, res, next) => {
 const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
     res.cookie("XSRF-TOKEN", req.csrfToken(), {
-      secure: process.env.NODE_ENV === "production",
+      // secure: process.env.NODE_ENV === "production",
+      secure:false,
       sameSite: process.env.NODE_ENV === "production" ? "None" : "lax",
       httpOnly: false,
     });
