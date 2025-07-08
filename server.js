@@ -22,7 +22,8 @@ const allowedOrigins = [
   `${process.env.DEV_URL}`,
   "http://localhost:5173",
   "http://localhost:5174",
-  "https://cotchel-admin-hy3ln.ondigitalocean.app","https://lionfish-app-by3cf.ondigitalocean.app/
+  "https://cotchel-admin-hy3ln.ondigitalocean.app",
+  "https://lionfish-app-by3cf.ondigitalocean.app/",
 ];
 const io = new Server(server, {
   cors: {
