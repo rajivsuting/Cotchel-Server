@@ -210,6 +210,14 @@ app.use("/api/health", healthRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/test", testRoutes);
 
+app.get("/csrf-debug", (req, res) => {
+  res.json({
+    cookie: req.cookies["XSRF-TOKEN"],
+    header: req.headers["x-xsrf-token"],
+    csrfToken: req.csrfToken(),
+  });
+});
+
 // Setup Socket.IO
 setupSocket(io);
 
