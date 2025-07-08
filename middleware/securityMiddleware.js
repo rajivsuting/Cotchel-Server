@@ -52,13 +52,25 @@ const csrfProtection = csrf({
     "/api/auth/resend-otp", // Allow OTP resend without CSRF
     "/api/auth/request-reset", // Allow password reset request without CSRF
     "/api/auth/reset-password", // Allow password reset without CSRF
-    "/api/auth/update-last-active-role", // Allow role updates without CSRF
   ],
 });
 
 // CSRF error handler
 const handleCSRFError = (err, req, res, next) => {
   if (err.code === "EBADCSRFTOKEN") {
+    console.log("CSRF Error:", {
+      path: req.path,
+      method: req.method,
+      headers: req.headers,
+      cookies: req.cookies,
+    });
+    // Log CSRF violation for security monitoring
+    if (global.securityLogger) {
+      global.securityLogger.csrfViolation(req, {
+        error: err.message,
+        token: req.headers["x-csrf-token"] ? "present" : "missing",
+      });
+    }
     return res.status(403).json({
       message: "CSRF token validation failed",
       error: "Invalid or missing CSRF token",
@@ -70,11 +82,12 @@ const handleCSRFError = (err, req, res, next) => {
 // Add CSRF token to responses
 const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
+    console.log("Setting CSRF token for:", req.path);
     res.cookie("XSRF-TOKEN", req.csrfToken(), {
-      // secure: process.env.NODE_ENV === "production",
-      secure:false,
+      secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "None" : "lax",
       httpOnly: false,
+      // Don't set domain for cross-origin requests
     });
   }
   next();
