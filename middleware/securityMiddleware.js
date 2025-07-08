@@ -35,9 +35,10 @@ const globalRateLimiter = rateLimit({
 // CSRF protection middleware - Production friendly
 const csrfProtection = csrf({
   cookie: {
+    key: "XSRF-TOKEN",
     httpOnly: true,
     secure: process.env.NODE_ENV === "production", // HTTPS only in production
-    sameSite: process.env.NODE_ENV === "production" ? "None" : "lax",
+    sameSite: "strict",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
   ignorePaths: [
@@ -82,12 +83,10 @@ const handleCSRFError = (err, req, res, next) => {
 // Add CSRF token to responses
 const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
-    console.log("Setting CSRF token for:", req.path);
     res.cookie("XSRF-TOKEN", req.csrfToken(), {
-      secure: false,
-      sameSite: "lax",
-      httpOnly: true,
-      // Don't set domain for cross-origin requests
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      httpOnly: false, // Allow JavaScript access for CSRF token
     });
   }
   next();
