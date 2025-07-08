@@ -2,9 +2,10 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const { healthLogger } = require("../utils/logger");
+const { addCSRFToken } = require("../middleware/securityMiddleware");
 
 // Basic health check
-router.get("/", async (req, res) => {
+router.get("/", addCSRFToken, async (req, res) => {
   try {
     const startTime = Date.now();
 
