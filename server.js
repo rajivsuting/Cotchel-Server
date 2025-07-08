@@ -32,9 +32,8 @@ const io = new Server(server, {
   },
 });
 
-// Make io and securityLogger globally available
+// Make io globally available
 global.io = io;
-global.securityLogger = securityLogger;
 
 // Trust proxy for rate limiting
 app.set("trust proxy", 1);
@@ -147,8 +146,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// CSRF protection - uses the configured ignoreMethods from securityMiddleware
-app.use("/api", csrfProtection);
+// CSRF protection for all API routes except webhooks and health checks
+app.use("/api", (req, res, next) => {
+  if (req.path.includes("/webhook") || req.path.includes("/health")) {
+    return next();
+  }
+  csrfProtection(req, res, (err) => {
+    if (err && err.status === 403) {
+      securityLogger.csrfViolation(req, {
+        error: err.message,
+        token: req.headers["x-csrf-token"] ? "present" : "missing",
+      });
+    }
+    next(err);
+  });
+});
 
 // Add CSRF token to responses
 app.use(addCSRFToken);
