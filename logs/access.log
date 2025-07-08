@@ -4750,3 +4750,7 @@
 {"timestamp":"2025-07-08 13:50:44","level":"info","message":"Incoming request","service":"cotchel-server","environment":"development","requestId":"kjvt40fm1bp3h2wz0uyk","method":"OPTIONS","url":"/api/categories/all","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36","userId":"anonymous"}
 {"timestamp":"2025-07-08 13:50:45","level":"info","message":"Request completed","service":"cotchel-server","environment":"development","requestId":"kjvt40fm1bp3h2wz0uyk","method":"OPTIONS","url":"/api/categories/all","statusCode":204,"duration":"81ms","ip":"::1","userId":"anonymous"}
 {"timestamp":"2025-07-08 13:50:45","level":"info","message":"Request completed","service":"cotchel-server","environment":"development","requestId":"ynfvu4u602o80g4v0hzyk","method":"GET","url":"/all","statusCode":200,"duration":"938ms","ip":"::1","userId":"anonymous"}
+{"timestamp":"2025-07-08 14:03:48","level":"info","message":"Server started successfully","service":"cotchel-server","environment":"development","port":"5000"}
+{"timestamp":"2025-07-08 14:03:49","level":"info","message":"Database connected successfully","service":"cotchel-server","environment":"development"}
+{"timestamp":"2025-07-08 14:16:27","level":"info","message":"Server started successfully","service":"cotchel-server","environment":"development","port":"5000"}
+{"timestamp":"2025-07-08 14:16:28","level":"info","message":"Database connected successfully","service":"cotchel-server","environment":"development"}

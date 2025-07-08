@@ -59,19 +59,14 @@ const csrfProtection = csrf({
 // CSRF error handler
 const handleCSRFError = (err, req, res, next) => {
   if (err.code === "EBADCSRFTOKEN") {
-    console.log("CSRF Error:", {
-      path: req.path,
-      method: req.method,
-      headers: req.headers,
-      cookies: req.cookies,
-    });
-    // Log CSRF violation for security monitoring
-    if (global.securityLogger) {
-      global.securityLogger.csrfViolation(req, {
-        error: err.message,
-        token: req.headers["x-csrf-token"] ? "present" : "missing",
-      });
-    }
+    console.error(
+      "CSRF error on path:",
+      req.path,
+      "Headers:",
+      req.headers,
+      "Cookies:",
+      req.cookies
+    );
     return res.status(403).json({
       message: "CSRF token validation failed",
       error: "Invalid or missing CSRF token",

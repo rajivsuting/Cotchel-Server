@@ -147,27 +147,29 @@ app.use((req, res, next) => {
   next();
 });
 
-// CSRF protection for all API routes except webhooks and health checks
-app.use("/api", (req, res, next) => {
-  if (req.path.includes("/webhook") || req.path.includes("/health")) {
-    return next();
-  }
-  csrfProtection(req, res, (err) => {
-    if (err && err.status === 403) {
-      securityLogger.csrfViolation(req, {
-        error: err.message,
-        token: req.headers["x-csrf-token"] ? "present" : "missing",
-      });
-    }
-    next(err);
-  });
+// CSRF protection for state-changing resource routes
+const csrfProtectedRoutes = [
+  "/api/products",
+  "/api/orders",
+  "/api/cart",
+  "/api/address",
+  "/api/wishlist",
+  "/api/reviews",
+  "/api/dashboard",
+  "/api/inquiries",
+  "/api/analytics",
+  "/api/banners",
+  "/api/promotional-banners",
+  "/api/admin",
+  "/api/seller/earnings",
+  "/api/notifications",
+  "/api/seller/dashboard",
+  // add more as needed
+];
+
+csrfProtectedRoutes.forEach((route) => {
+  app.use(route, csrfProtection, addCSRFToken, handleCSRFError);
 });
-
-// Add CSRF token to responses
-app.use(addCSRFToken);
-
-// CSRF error handler
-app.use(handleCSRFError);
 
 // Routes
 app.get("/", verifyToken, (req, res) => {
@@ -177,26 +179,11 @@ app.get("/", verifyToken, (req, res) => {
 
 // API Routes
 app.use("/api/auth", authRoutes);
-app.use("/api/products", productRoutes);
+app.use("/api/image", uploadRoutes);
+app.use("/api/razorpay", razorpayRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/subcategories", subCategoryRoutes);
-app.use("/api/orders", orderRoutes);
-app.use("/api/image", uploadRoutes);
-app.use("/api/cart", cartRoutes);
-app.use("/api/razorpay", razorpayRoutes);
-app.use("/api/address", addressRoutes);
-app.use("/api/wishlist", wishListRoutes);
 app.use("/api/order-temp", tempOrderRoutes);
-app.use("/api/reviews", reviewRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/inquiries", inquiryRoutes);
-app.use("/api/analytics", analyticsRoutes);
-app.use("/api/banners", bannerRoutes);
-app.use("/api/promotional-banners", promotionalBannerRoutes);
-app.use("/api/admin", adminTransactionRoutes);
-app.use("/api/seller/earnings", sellerEarningsRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/seller/dashboard", sellerDashboardRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/test", testRoutes);
