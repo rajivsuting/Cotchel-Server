@@ -18,12 +18,9 @@ const {
 const app = express();
 const server = http.createServer(app);
 const allowedOrigins = [
-  `${process.env.PRO_URL}`,
-  `${process.env.DEV_URL}`,
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "https://cotchel-admin-hy3ln.ondigitalocean.app",
-  "https://lionfish-app-by3cf.ondigitalocean.app/",
+  "https://lionfish-app-by3cf.ondigitalocean.app", // frontend
+  "https://starfish-app-6q6ot.ondigitalocean.app", // backend (if needed)
+  // add any other allowed origins
 ];
 const io = new Server(server, {
   cors: {
@@ -75,7 +72,12 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+      // allow requests with no origin (like mobile apps, curl, etc.)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
     allowedHeaders: [
       "Origin",
@@ -86,6 +88,7 @@ app.use(
       "X-CSRF-Token",
       "X-Request-ID",
     ],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   })
 );
 

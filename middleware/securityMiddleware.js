@@ -37,8 +37,8 @@ const csrfProtection = csrf({
   cookie: {
     key: "XSRF-TOKEN",
     httpOnly: false, // Allow JavaScript access for CSRF token (required for SPA)
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    secure: true, // Always true for cross-origin/production
+    sameSite: "none", // Required for cross-origin cookies
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
   ignorePaths: [
