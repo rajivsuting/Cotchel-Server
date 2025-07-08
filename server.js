@@ -171,14 +171,23 @@ csrfProtectedRoutes.forEach((route) => {
   app.use(route, csrfProtection, addCSRFToken, handleCSRFError);
 });
 
-// Routes
-app.get("/", verifyToken, (req, res) => {
-  const message = "Welcome to Cotchel!";
-  res.json({ message });
-});
-
 // API Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/products", productRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/banners", bannerRoutes);
+app.use("/api/wishlist", wishListRoutes);
+app.use("/api/orders", orderRoutes);
+app.use("/api/address", addressRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/inquiries", inquiryRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/promotional-banners", promotionalBannerRoutes);
+app.use("/api/admin", adminTransactionRoutes);
+app.use("/api/seller/earnings", sellerEarningsRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/seller/dashboard", sellerDashboardRoutes);
 app.use("/api/image", uploadRoutes);
 app.use("/api/razorpay", razorpayRoutes);
 app.use("/api/categories", categoryRoutes);
