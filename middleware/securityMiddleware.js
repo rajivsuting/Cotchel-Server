@@ -37,7 +37,7 @@ const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production", // HTTPS only in production
-    sameSite: "strict",
+    sameSite: process.env.NODE_ENV === "production" ? "None" : "lax",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
   ignorePaths: [
@@ -52,6 +52,7 @@ const csrfProtection = csrf({
     "/api/auth/resend-otp", // Allow OTP resend without CSRF
     "/api/auth/request-reset", // Allow password reset request without CSRF
     "/api/auth/reset-password", // Allow password reset without CSRF
+    "/api/auth/update-last-active-role", // Allow role updates without CSRF
   ],
 });
 
