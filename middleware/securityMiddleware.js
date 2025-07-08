@@ -84,9 +84,9 @@ const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
     console.log("Setting CSRF token for:", req.path);
     res.cookie("XSRF-TOKEN", req.csrfToken(), {
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "None" : "lax",
-      httpOnly: false,
+      secure: false,
+      sameSite: "lax",
+      httpOnly: true,
       // Don't set domain for cross-origin requests
     });
   }
