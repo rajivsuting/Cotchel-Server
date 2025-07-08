@@ -36,8 +36,8 @@ const globalRateLimiter = rateLimit({
 const csrfProtection = csrf({
   cookie: {
     key: "XSRF-TOKEN",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production", // HTTPS only in production
+    httpOnly: false, // Allow JavaScript access for CSRF token (required for SPA)
+    secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
