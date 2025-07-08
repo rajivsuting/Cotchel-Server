@@ -36,23 +36,20 @@ const globalRateLimiter = rateLimit({
 const csrfProtection = csrf({
   cookie: {
     key: "XSRF-TOKEN",
-    httpOnly: false, // Allow JavaScript access for CSRF token (required for SPA)
-    secure: true, // Always true for cross-origin/production
-    sameSite: "none", // Required for cross-origin cookies
+    httpOnly: false, // must be false for SPA
+    secure: true, // must be true for HTTPS/cross-origin
+    sameSite: "none", // must be none for cross-origin
+    path: "/",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
   ignorePaths: [
-    "/api/razorpay/webhook",
-    "/api/shiprocket/webhook",
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/verify-email",
+    "/api/auth/resend-otp",
+    "/api/auth/request-reset",
+    "/api/auth/reset-password",
     "/api/health",
-    "/api/image/upload",
-    "/api/image/upload-file",
-    "/api/auth/login", // Allow login without CSRF
-    "/api/auth/register", // Allow registration without CSRF
-    "/api/auth/verify-email", // Allow email verification without CSRF
-    "/api/auth/resend-otp", // Allow OTP resend without CSRF
-    "/api/auth/request-reset", // Allow password reset request without CSRF
-    "/api/auth/reset-password", // Allow password reset without CSRF
   ],
 });
 
@@ -60,11 +57,10 @@ const csrfProtection = csrf({
 const handleCSRFError = (err, req, res, next) => {
   if (err.code === "EBADCSRFTOKEN") {
     console.error(
-      "CSRF error on path:",
+      "CSRF error:",
       req.path,
-      "Headers:",
+      req.method,
       req.headers,
-      "Cookies:",
       req.cookies
     );
     return res.status(403).json({
@@ -79,9 +75,10 @@ const handleCSRFError = (err, req, res, next) => {
 const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
     res.cookie("XSRF-TOKEN", req.csrfToken(), {
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      httpOnly: false, // Allow JavaScript access for CSRF token
+      httpOnly: false,
+      secure: true,
+      sameSite: "none",
+      path: "/",
     });
   }
   next();
