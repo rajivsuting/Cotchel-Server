@@ -168,7 +168,17 @@ const csrfProtectedRoutes = [
 ];
 
 csrfProtectedRoutes.forEach((route) => {
-  app.use(route, csrfProtection, addCSRFToken, handleCSRFError);
+  app.use(route, (req, res, next) => {
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+      csrfProtection(req, res, (err) => {
+        if (err) return handleCSRFError(err, req, res, next);
+        addCSRFToken(req, res, next);
+      });
+    } else {
+      // For GET, HEAD, OPTIONS, just add CSRF token to response if available
+      addCSRFToken(req, res, next);
+    }
+  });
 });
 
 // API Routes
