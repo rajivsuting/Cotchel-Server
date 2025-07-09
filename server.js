@@ -167,7 +167,6 @@ const csrfProtectedRoutes = [
   "/api/seller/earnings",
   "/api/notifications",
   "/api/seller/dashboard",
-  "/api/health", // Add health route for CSRF token generation
   // add more as needed
 ];
 
@@ -176,11 +175,14 @@ csrfProtectedRoutes.forEach((route) => {
     if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
       csrfProtection(req, res, (err) => {
         if (err) return handleCSRFError(err, req, res, next);
-        addCSRFToken(req, res, next);
+        next();
       });
     } else {
-      // For GET, HEAD, OPTIONS, just add CSRF token to response if available
-      addCSRFToken(req, res, next);
+      // For GET, HEAD, OPTIONS, use csrfProtection to generate token
+      csrfProtection(req, res, (err) => {
+        if (err) return handleCSRFError(err, req, res, next);
+        next();
+      });
     }
   });
 });
@@ -222,7 +224,7 @@ app.get("/csrf-debug", (req, res) => {
 });
 
 // Add a simple CSRF test route
-app.get("/api/csrf-test", csrfProtection, addCSRFToken, (req, res) => {
+app.get("/api/csrf-test", csrfProtection, (req, res) => {
   res.json({
     message: "CSRF token generated successfully",
     token: req.csrfToken ? "Present" : "Missing",
@@ -230,7 +232,7 @@ app.get("/api/csrf-test", csrfProtection, addCSRFToken, (req, res) => {
   });
 });
 
-app.post("/api/csrf-test", csrfProtection, addCSRFToken, (req, res) => {
+app.post("/api/csrf-test", csrfProtection, (req, res) => {
   res.json({
     message: "CSRF token validated successfully",
     token: req.csrfToken ? "Present" : "Missing",
