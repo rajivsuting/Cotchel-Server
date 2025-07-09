@@ -1,5 +1,5 @@
 const rateLimit = require("express-rate-limit");
-const csrf = require("csurf");
+// const csrf = require("csurf"); // Removed CSRF
 
 // In-memory storage for tracking
 const orderTracking = {
@@ -32,76 +32,7 @@ const globalRateLimiter = rateLimit({
   },
 });
 
-// CSRF protection middleware - Production friendly
-const csrfProtection = csrf({
-  cookie: {
-    key: "XSRF-TOKEN",
-    httpOnly: false, // must be false for SPA
-    secure: true, // must be true for HTTPS/cross-origin
-    sameSite: "none", // must be none for cross-origin
-    path: "/",
-    domain: ".ondigitalocean.app", // Re-enabled for cross-subdomain sharing
-  },
-  ignoreMethods: ["GET", "HEAD", "OPTIONS"],
-  ignorePaths: [
-    "/api/auth/login",
-    "/api/auth/register",
-    "/api/auth/verify-email",
-    "/api/auth/resend-otp",
-    "/api/auth/request-reset",
-    "/api/auth/reset-password",
-    "/api/health",
-    "/api/auth/refresh-token",
-  ],
-});
-
-// CSRF error handler
-const handleCSRFError = (err, req, res, next) => {
-  if (err.code === "EBADCSRFTOKEN") {
-    console.error("[CSRF] Validation failed for:", req.path, req.method);
-    console.error("[CSRF] Headers:", {
-      "x-csrf-token": req.headers["x-csrf-token"],
-      "x-xsrf-token": req.headers["x-xsrf-token"],
-      "x-requested-with": req.headers["x-requested-with"],
-    });
-    console.error("[CSRF] Cookies:", req.cookies);
-    console.error("[CSRF] Origin:", req.headers.origin);
-    console.error("[CSRF] Referer:", req.headers.referer);
-
-    return res.status(403).json({
-      message: "CSRF token validation failed",
-      error: "Invalid or missing CSRF token",
-    });
-  }
-  next(err);
-};
-
-// Add CSRF token to responses
-const addCSRFToken = (req, res, next) => {
-  if (req.csrfToken) {
-    const token = req.csrfToken();
-    console.log(
-      "[CSRF] Setting token for:",
-      req.path,
-      "Token:",
-      token ? "Present" : "Missing"
-    );
-
-    res.cookie("XSRF-TOKEN", token, {
-      httpOnly: false,
-      secure: true,
-      sameSite: "none",
-      path: "/",
-      // Try without domain first, let browser handle it
-      // domain: ".ondigitalocean.app", // Added for cross-subdomain
-    });
-
-    console.log("[CSRF] Cookie set without domain restriction");
-  } else {
-    console.warn("[CSRF] No csrfToken available for:", req.path);
-  }
-  next();
-};
+// Removed CSRF protection middleware, error handler, and addCSRFToken
 
 // Fraud detection middleware
 const fraudDetection = async (req, res, next) => {
@@ -147,8 +78,5 @@ const fraudDetection = async (req, res, next) => {
 module.exports = {
   orderRateLimiter,
   globalRateLimiter,
-  csrfProtection,
-  handleCSRFError,
-  addCSRFToken,
   fraudDetection,
 };

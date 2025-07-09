@@ -123,12 +123,7 @@ const testRoutes = require("./routes/testRoutes");
 const connectDb = require("./database/connectDb");
 const errorMiddleware = require("./middleware/errorMiddleware");
 const { verifyToken } = require("./middleware/authMiddleware");
-const {
-  globalRateLimiter,
-  csrfProtection,
-  handleCSRFError,
-  addCSRFToken,
-} = require("./middleware/securityMiddleware");
+const { globalRateLimiter } = require("./middleware/securityMiddleware");
 const { setupSocket } = require("./sockets/notificationSocket");
 
 // Global rate limiting with logging
@@ -149,43 +144,6 @@ app.use("/api", (req, res, next) => {
 app.use((req, res, next) => {
   req.io = io;
   next();
-});
-
-// CSRF protection for state-changing resource routes
-const csrfProtectedRoutes = [
-  "/api/products",
-  "/api/orders",
-  "/api/cart",
-  "/api/address",
-  "/api/wishlist",
-  "/api/reviews",
-  "/api/dashboard",
-  "/api/inquiries",
-  "/api/analytics",
-  "/api/banners",
-  "/api/promotional-banners",
-  "/api/admin",
-  "/api/seller/earnings",
-  "/api/notifications",
-  "/api/seller/dashboard",
-  // add more as needed
-];
-
-csrfProtectedRoutes.forEach((route) => {
-  app.use(route, (req, res, next) => {
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
-      csrfProtection(req, res, (err) => {
-        if (err) return handleCSRFError(err, req, res, next);
-        next();
-      });
-    } else {
-      // For GET, HEAD, OPTIONS, use csrfProtection to generate token
-      csrfProtection(req, res, (err) => {
-        if (err) return handleCSRFError(err, req, res, next);
-        next();
-      });
-    }
-  });
 });
 
 // API Routes
@@ -213,33 +171,6 @@ app.use("/api/order-temp", tempOrderRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/test", testRoutes);
-
-app.get("/csrf-debug", (req, res) => {
-  res.json({
-    cookie: req.cookies["XSRF-TOKEN"],
-    header: req.headers["x-xsrf-token"],
-    csrfToken: req.csrfToken ? req.csrfToken() : "Not available",
-    allCookies: req.cookies,
-    allHeaders: req.headers,
-  });
-});
-
-// Add a simple CSRF test route
-app.get("/api/csrf-test", csrfProtection, (req, res) => {
-  res.json({
-    message: "CSRF token generated successfully",
-    token: req.csrfToken ? "Present" : "Missing",
-    timestamp: new Date().toISOString(),
-  });
-});
-
-app.post("/api/csrf-test", csrfProtection, (req, res) => {
-  res.json({
-    message: "CSRF token validated successfully",
-    token: req.csrfToken ? "Present" : "Missing",
-    timestamp: new Date().toISOString(),
-  });
-});
 
 // Setup Socket.IO
 setupSocket(io);

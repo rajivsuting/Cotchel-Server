@@ -2,9 +2,9 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const { healthLogger } = require("../utils/logger");
-const { csrfProtection } = require("../middleware/securityMiddleware");
+// const { csrfProtection } = require("../middleware/securityMiddleware"); // Removed
 
-router.get("/", csrfProtection, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const startTime = Date.now();
 
@@ -43,8 +43,7 @@ router.get("/", csrfProtection, async (req, res) => {
         arch: process.arch,
         pid: process.pid,
       },
-      // Add CSRF token in response body as fallback
-      csrfToken: req.csrfToken ? req.csrfToken() : null,
+      // Removed CSRF token from response
     };
 
     // Log health check
