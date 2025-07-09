@@ -51,6 +51,7 @@ const csrfProtection = csrf({
     "/api/auth/request-reset",
     "/api/auth/reset-password",
     "/api/health",
+    "/api/auth/refresh-token",
   ],
 });
 

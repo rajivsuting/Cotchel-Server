@@ -18,6 +18,7 @@ const {
 const app = express();
 const server = http.createServer(app);
 const allowedOrigins = [
+  "http://localhost:5173",
   "https://lionfish-app-by3cf.ondigitalocean.app", // frontend
   "https://starfish-app-6q6ot.ondigitalocean.app", // backend (if needed)
   // add any other allowed origins
