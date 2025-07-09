@@ -17,6 +17,7 @@ const mongoose = require("mongoose");
 const axios = require("axios");
 const { registerPickupLocation } = require("../services/shiprocketService");
 const { authenticateShiprocket } = require("../services/shiprocketService");
+const NotificationService = require("../services/notificationService");
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -392,21 +393,12 @@ exports.addSellerDetails = async (req, res) => {
       console.warn("Shiprocket pickup location failed:", err.message);
     }
 
-    // Notify admins
-    const notification = new Notification({
-      message: `New seller registered: ${
-        user.fullName || user.email
-      } (Pending verification)`,
-      type: "seller_registered",
+    // Notify admins of pending seller approval
+    await NotificationService.notifyVerificationStatus(user._id, "pending");
+    const { emitNotification } = require("../sockets/notificationSocket");
+    emitNotification(req.io, "accountVerification", {
       sellerId: user._id,
-    });
-    await notification.save();
-
-    emitNotification(req.io, "sellerRegistered", {
-      id: notification._id,
-      message: notification.message,
-      sellerId: notification.sellerId,
-      timestamp: notification.timestamp,
+      status: "pending",
     });
 
     res.status(200).json({
@@ -845,19 +837,11 @@ exports.approveSeller = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Optionally emit a notification to admins about the approval
-    const notification = new Notification({
-      message: `Seller ${user.fullName || user.email} has been approved`,
-      type: "seller_registered",
+    await NotificationService.notifyVerificationStatus(user._id, "approved");
+    const { emitNotification } = require("../sockets/notificationSocket");
+    emitNotification(req.io, "accountVerification", {
       sellerId: user._id,
-      read: false,
-    });
-    await notification.save();
-
-    emitNotification(req.io, "sellerApproved", {
-      id: notification._id,
-      message: notification.message,
-      sellerId: notification.sellerId,
-      timestamp: notification.timestamp,
+      status: "approved",
     });
 
     res.status(200).json({ message: "Seller approved", data: user });
@@ -874,6 +858,8 @@ exports.rejectSeller = async (req, res) => {
     // Optionally clear sellerDetails or leave as is
     // user.sellerDetails = null; // Uncomment to clear
     await user.save();
+    // Notify admins of seller rejection
+    await NotificationService.notifyVerificationStatus(user._id, "rejected");
     res.status(200).json({ message: "Seller rejected", data: user });
   } catch (error) {
     res.status(500).json({ message: "Error rejecting seller", error });
