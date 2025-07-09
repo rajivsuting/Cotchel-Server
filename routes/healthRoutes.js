@@ -43,6 +43,8 @@ router.get("/", csrfProtection, async (req, res) => {
         arch: process.arch,
         pid: process.pid,
       },
+      // Add CSRF token in response body as fallback
+      csrfToken: req.csrfToken ? req.csrfToken() : null,
     };
 
     // Log health check

@@ -40,8 +40,7 @@ const csrfProtection = csrf({
     secure: true, // must be true for HTTPS/cross-origin
     sameSite: "none", // must be none for cross-origin
     path: "/",
-    // Try without domain first, let browser handle it
-    // domain: ".ondigitalocean.app", // Added for cross-subdomain
+    domain: ".ondigitalocean.app", // Re-enabled for cross-subdomain sharing
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
   ignorePaths: [
