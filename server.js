@@ -167,6 +167,7 @@ const csrfProtectedRoutes = [
   "/api/seller/earnings",
   "/api/notifications",
   "/api/seller/dashboard",
+  "/api/health", // Add health route for CSRF token generation
   // add more as needed
 ];
 
@@ -214,7 +215,26 @@ app.get("/csrf-debug", (req, res) => {
   res.json({
     cookie: req.cookies["XSRF-TOKEN"],
     header: req.headers["x-xsrf-token"],
-    csrfToken: req.csrfToken(),
+    csrfToken: req.csrfToken ? req.csrfToken() : "Not available",
+    allCookies: req.cookies,
+    allHeaders: req.headers,
+  });
+});
+
+// Add a simple CSRF test route
+app.get("/api/csrf-test", csrfProtection, addCSRFToken, (req, res) => {
+  res.json({
+    message: "CSRF token generated successfully",
+    token: req.csrfToken ? "Present" : "Missing",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post("/api/csrf-test", csrfProtection, addCSRFToken, (req, res) => {
+  res.json({
+    message: "CSRF token validated successfully",
+    token: req.csrfToken ? "Present" : "Missing",
+    timestamp: new Date().toISOString(),
   });
 });
 

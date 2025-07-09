@@ -40,7 +40,8 @@ const csrfProtection = csrf({
     secure: true, // must be true for HTTPS/cross-origin
     sameSite: "none", // must be none for cross-origin
     path: "/",
-    domain: ".ondigitalocean.app", // Added for cross-subdomain
+    // Try without domain first, let browser handle it
+    // domain: ".ondigitalocean.app", // Added for cross-subdomain
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
   ignorePaths: [
@@ -57,13 +58,16 @@ const csrfProtection = csrf({
 // CSRF error handler
 const handleCSRFError = (err, req, res, next) => {
   if (err.code === "EBADCSRFTOKEN") {
-    console.error(
-      "CSRF error:",
-      req.path,
-      req.method,
-      req.headers,
-      req.cookies
-    );
+    console.error("[CSRF] Validation failed for:", req.path, req.method);
+    console.error("[CSRF] Headers:", {
+      "x-csrf-token": req.headers["x-csrf-token"],
+      "x-xsrf-token": req.headers["x-xsrf-token"],
+      "x-requested-with": req.headers["x-requested-with"],
+    });
+    console.error("[CSRF] Cookies:", req.cookies);
+    console.error("[CSRF] Origin:", req.headers.origin);
+    console.error("[CSRF] Referer:", req.headers.referer);
+
     return res.status(403).json({
       message: "CSRF token validation failed",
       error: "Invalid or missing CSRF token",
@@ -75,13 +79,26 @@ const handleCSRFError = (err, req, res, next) => {
 // Add CSRF token to responses
 const addCSRFToken = (req, res, next) => {
   if (req.csrfToken) {
-    res.cookie("XSRF-TOKEN", req.csrfToken(), {
+    const token = req.csrfToken();
+    console.log(
+      "[CSRF] Setting token for:",
+      req.path,
+      "Token:",
+      token ? "Present" : "Missing"
+    );
+
+    res.cookie("XSRF-TOKEN", token, {
       httpOnly: false,
       secure: true,
       sameSite: "none",
       path: "/",
-      domain: ".ondigitalocean.app", // Added for cross-subdomain
+      // Try without domain first, let browser handle it
+      // domain: ".ondigitalocean.app", // Added for cross-subdomain
     });
+
+    console.log("[CSRF] Cookie set without domain restriction");
+  } else {
+    console.warn("[CSRF] No csrfToken available for:", req.path);
   }
   next();
 };
