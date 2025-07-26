@@ -148,6 +148,7 @@ exports.getAllProducts = async (req, res) => {
     maxPrice,
     brands,
     status, // Add status to the query parameters
+    lotSize, // Add lotSize as a possible range string (e.g., 10-20, 30+)
   } = req.query;
 
   const user = req.user || {};
@@ -201,14 +202,48 @@ exports.getAllProducts = async (req, res) => {
       ];
     }
 
+    // Ratings: use $gte for 'X★ & up'
     if (ratings) {
-      filter.ratings = { $in: ratings.split(",").map(Number) };
+      const ratingValue = Number(ratings);
+      if (!isNaN(ratingValue)) {
+        filter.ratings = { $gte: ratingValue };
+      }
     }
 
+    // Lot size: use lotSizeMin/lotSizeMax if present, otherwise parse lotSize as a range string
     if (lotSizeMin || lotSizeMax) {
       filter.lotSize = {};
-      if (lotSizeMin) filter.lotSize.$gte = parseInt(lotSizeMin);
-      if (lotSizeMax) filter.lotSize.$lte = parseInt(lotSizeMax);
+      if (lotSizeMin) {
+        const minValue = Number(lotSizeMin);
+        if (!isNaN(minValue)) {
+          filter.lotSize.$gte = minValue;
+        }
+      }
+      if (lotSizeMax) {
+        const maxValue = Number(lotSizeMax);
+        if (!isNaN(maxValue)) {
+          filter.lotSize.$lte = maxValue;
+        }
+      }
+    } else if (lotSize) {
+      if (typeof lotSize === "string") {
+        if (lotSize.endsWith("+")) {
+          const min = Number(lotSize.replace("+", ""));
+          if (!isNaN(min)) {
+            filter.lotSize = { $gte: min };
+          }
+        } else if (lotSize.includes("-")) {
+          const [min, max] = lotSize.split("-").map(Number);
+          if (!isNaN(min) && !isNaN(max)) {
+            filter.lotSize = { $gte: min, $lte: max };
+          }
+        } else {
+          const exactValue = Number(lotSize);
+          if (!isNaN(exactValue)) {
+            filter.lotSize = exactValue;
+          }
+        }
+      }
     }
 
     if (minPrice || maxPrice) {
@@ -228,6 +263,7 @@ exports.getAllProducts = async (req, res) => {
       }
     }
 
+    // Apply role-based filters last to avoid conflicts
     if (role === "Buyer") {
       filter.quantityAvailable = { $gt: 0 };
     } else if (role === "Seller") {
@@ -307,6 +343,26 @@ exports.getProductById = async (req, res, next) => {
     })
       .limit(5)
       .populate("category", "name");
+
+    // Debug logging for product data
+    console.log("=== PRODUCT DATA DEBUG ===");
+    console.log("Product ID:", product._id);
+    console.log("Product ratings:", product.ratings);
+    console.log("Product reviewsCount:", product.reviewsCount);
+    console.log("Reviews array length:", product.reviews?.length || 0);
+
+    if (product.reviews && product.reviews.length > 0) {
+      console.log("Reviews in product:");
+      product.reviews.forEach((review, index) => {
+        console.log(`Review ${index + 1}:`, {
+          id: review._id,
+          rating: review.rating,
+          ratingType: typeof review.rating,
+          user: review.user?.fullName || review.user?._id,
+        });
+      });
+    }
+    console.log("=== END PRODUCT DATA DEBUG ===");
 
     res.status(200).json({
       message: "Product retrieved successfully",
@@ -668,6 +724,48 @@ exports.editProduct = async (req, res) => {
       message: "Error updating product",
       error: error.message,
     });
+  }
+};
+
+// Debug endpoint to check product data
+exports.debugProducts = async (req, res) => {
+  try {
+    const products = await Product.find({})
+      .select("title ratings lotSize quantityAvailable price")
+      .limit(10)
+      .lean();
+
+    const stats = {
+      totalProducts: await Product.countDocuments({}),
+      productsWithRatings: await Product.countDocuments({
+        ratings: { $gt: 0 },
+      }),
+      productsWithZeroRatings: await Product.countDocuments({ ratings: 0 }),
+      productsWithoutRatings: await Product.countDocuments({
+        ratings: { $exists: false },
+      }),
+      avgLotSize: await Product.aggregate([
+        { $group: { _id: null, avgLotSize: { $avg: "$lotSize" } } },
+      ]),
+      lotSizeRange: await Product.aggregate([
+        {
+          $group: {
+            _id: null,
+            minLotSize: { $min: "$lotSize" },
+            maxLotSize: { $max: "$lotSize" },
+          },
+        },
+      ]),
+      sampleProducts: products,
+    };
+
+    res.status(200).json({
+      message: "Product debug data",
+      data: stats,
+    });
+  } catch (error) {
+    console.error("Error in debug endpoint:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 

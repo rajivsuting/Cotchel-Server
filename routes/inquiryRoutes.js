@@ -3,41 +3,42 @@ const router = express.Router();
 const inquiryController = require("../controllers/inquiryController");
 const authMiddleware = require("../middleware/authMiddleware");
 
-// Public routes (for users)
+// User routes (for authenticated users)
 router.post("/", authMiddleware.verifyToken, inquiryController.createInquiry);
-
-// Admin routes
 router.get(
-  "/",
+  "/user",
   authMiddleware.verifyToken,
-
-  inquiryController.getAllInquiries
+  inquiryController.getUserInquiries
 );
-
 router.get(
   "/:id",
   authMiddleware.verifyToken,
   inquiryController.getInquiryById
 );
 
+// Admin routes (for admin users only)
+router.get(
+  "/",
+  authMiddleware.verifyToken,
+  authMiddleware.restrictTo("Admin"),
+  inquiryController.getAllInquiries
+);
 router.patch(
   "/:id/status",
   authMiddleware.verifyToken,
-
+  authMiddleware.restrictTo("Admin"),
   inquiryController.updateInquiryStatus
 );
-
 router.post(
   "/:id/response",
   authMiddleware.verifyToken,
-
+  authMiddleware.restrictTo("Admin"),
   inquiryController.addResponse
 );
-
 router.delete(
   "/:id",
   authMiddleware.verifyToken,
-
+  authMiddleware.restrictTo("Admin"),
   inquiryController.deleteInquiry
 );
 

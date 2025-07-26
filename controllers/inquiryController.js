@@ -2,7 +2,7 @@ const Inquiry = require("../models/inquiry");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 
-// Get all inquiries with pagination and filters
+// Get all inquiries with pagination and filters (ADMIN ONLY)
 exports.getAllInquiries = async (req, res) => {
   try {
     const { page = 1, limit = 10, status, inquiryType, search } = req.query;
@@ -49,7 +49,55 @@ exports.getAllInquiries = async (req, res) => {
   }
 };
 
-// Get single inquiry by ID
+// Get user's own inquiries (USER ENDPOINT)
+exports.getUserInquiries = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, inquiryType, search } = req.query;
+    const skip = (page - 1) * limit;
+    const userId = req.user._id;
+
+    // Build filter object - ALWAYS filter by user
+    const filter = { user: userId };
+    if (status) filter.status = status;
+    if (inquiryType) filter.inquiryType = inquiryType;
+    if (search) {
+      filter.$or = [
+        { subject: { $regex: search, $options: "i" } },
+        { message: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Get user's inquiries with pagination
+    const inquiries = await Inquiry.find(filter)
+      .populate("user", "fullName email")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get total count for pagination
+    const total = await Inquiry.countDocuments(filter);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        inquiries,
+        totalPages: Math.ceil(total / limit),
+        currentPage: parseInt(page),
+        total,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching user inquiries:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching inquiries",
+      error: error.message,
+    });
+  }
+};
+
+// Get single inquiry by ID (with user authorization)
 exports.getInquiryById = async (req, res) => {
   try {
     const inquiry = await Inquiry.findById(req.params.id)
@@ -62,6 +110,18 @@ exports.getInquiryById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Inquiry not found",
+      });
+    }
+
+    // Check if user is authorized to view this inquiry
+    // Users can only view their own inquiries, admins can view all
+    if (
+      inquiry.user._id.toString() !== req.user._id.toString() &&
+      req.user.role !== "Admin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to view this inquiry",
       });
     }
 
@@ -130,7 +190,7 @@ exports.createInquiry = async (req, res) => {
   }
 };
 
-// Update inquiry status
+// Update inquiry status (ADMIN ONLY)
 exports.updateInquiryStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -246,7 +306,7 @@ exports.addResponse = async (req, res) => {
   }
 };
 
-// Delete inquiry
+// Delete inquiry (ADMIN ONLY)
 exports.deleteInquiry = async (req, res) => {
   try {
     const inquiry = await Inquiry.findByIdAndDelete(req.params.id);

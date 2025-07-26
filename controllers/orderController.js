@@ -418,7 +418,7 @@ exports.createOrderFromCart = async (req, res) => {
 
     const createdOrders = [];
 
-    // Create orders for each seller
+    // Create orders for each sellernt
     console.log("Creating orders for each seller...");
     for (const [sellerId, items] of Object.entries(sellerOrders)) {
       console.log(`Creating order for seller ${sellerId}...`);
@@ -641,13 +641,16 @@ exports.createOrderFromBuyNow = async (req, res) => {
   session.startTransaction();
 
   try {
+    console.log("=== Starting Buy Now Order Creation Process ===");
     const { productId, quantity, addressId } = req.body;
     const { _id: userId } = req.user;
 
     if (!productId || !quantity || !addressId) {
-      return res
-        .status(400)
-        .json({ message: "Product, quantity, and address are required" });
+      throw new OrderError("Product, quantity, and address are required", 400);
+    }
+
+    if (quantity <= 0) {
+      throw new OrderError("Quantity must be greater than 0", 400);
     }
 
     const [product, shippingAddress, buyer] = await Promise.all([
@@ -657,31 +660,46 @@ exports.createOrderFromBuyNow = async (req, res) => {
     ]);
 
     if (!product) {
-      return res.status(404).json({ message: "Product not found" });
+      throw new OrderError("Product not found", 404);
     }
 
     if (!shippingAddress) {
-      return res.status(404).json({ message: "Shipping address not found" });
+      throw new OrderError("Shipping address not found", 404);
     }
 
     if (!buyer) {
-      return res.status(404).json({ message: "Buyer details not found" });
+      throw new OrderError("Buyer details not found", 404);
     }
 
     // Ensure product has a lotSize property
     if (!product.lotSize || product.lotSize <= 0) {
-      return res.status(400).json({ message: "Invalid lot size for product" });
+      throw new OrderError("Invalid lot size for product", 400);
     }
 
     // Calculate total quantity based on lot size
     const totalQuantity = quantity * product.lotSize;
     const totalPrice = product.price * totalQuantity;
 
+    console.log("Buy Now calculations:", {
+      productId: product._id,
+      productTitle: product.title,
+      requestedLots: quantity,
+      lotSize: product.lotSize,
+      totalQuantity,
+      totalPrice,
+      availableStock: product.quantityAvailable,
+    });
+
     // Validate stock availability
     if (product.quantityAvailable < totalQuantity) {
-      return res.status(400).json({
-        message: `Insufficient quantity available for ${product.title}`,
-      });
+      throw new OrderError(
+        `Insufficient quantity available for ${
+          product.title
+        }. Available: ${Math.floor(
+          product.quantityAvailable / product.lotSize
+        )} lots, Requested: ${quantity} lots`,
+        400
+      );
     }
 
     const order = new Order({
@@ -738,9 +756,31 @@ exports.createOrderFromBuyNow = async (req, res) => {
     await order.save({ session });
 
     // Generate the payment order
-    const razorpayOrder = await paymentService.createPaymentOrder(order);
+    const razorpayOrder = await paymentService.createPaymentOrder({
+      totalPrice: order.totalPrice,
+      buyerId: buyer._id,
+    });
     order.paymentTransactionId = razorpayOrder.id;
     await order.save({ session });
+
+    // Create Shiprocket shipment for buy now order
+    try {
+      console.log(
+        `Attempting to create Shiprocket shipment for buy now order ${order._id}...`
+      );
+      const shiprocketResponse = await createShiprocketShipment(order);
+      console.log(
+        "Shiprocket shipment created successfully:",
+        shiprocketResponse
+      );
+      await updateOrderStatus(order._id, "Shipped", "Shipment created");
+    } catch (error) {
+      console.error(
+        `Failed to create Shiprocket shipment for buy now order ${order._id}:`,
+        error.message
+      );
+      // Continue with order creation even if shipping fails
+    }
 
     // Respond with the created order details
     res.status(201).json({
@@ -755,10 +795,24 @@ exports.createOrderFromBuyNow = async (req, res) => {
     await session.commitTransaction();
   } catch (error) {
     await session.abortTransaction();
-    console.error("Error occurred:", error);
-    res
-      .status(500)
-      .json({ message: "Error creating order", error: error.message });
+    console.error("=== Buy Now Order Creation Process Failed ===");
+    console.error("Error:", error.message);
+
+    if (error instanceof OrderError || error instanceof PaymentError) {
+      return res.status(error.code).json({
+        message: error.message,
+        details: error.details,
+      });
+    }
+
+    console.error("Error creating buy now order:", error);
+    res.status(500).json({
+      message: "Error creating order",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
+    });
   } finally {
     session.endSession();
   }

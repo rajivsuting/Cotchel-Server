@@ -5,15 +5,25 @@ const Order = require("../models/order");
 exports.addReview = async (req, res) => {
   try {
     const { rating, comment } = req.body;
-    const { productId, orderId } = req.params;
+    const { productId } = req.params;
     const userId = req.user._id;
 
-    console.log(userId);
+    console.log("Adding review for product:", productId, "by user:", userId);
 
-    if (!rating || rating < 1 || rating > 5) {
+    const numericRating = Number(rating);
+    if (
+      !numericRating ||
+      numericRating < 1 ||
+      numericRating > 5 ||
+      isNaN(numericRating)
+    ) {
       return res
         .status(400)
-        .json({ message: "Rating must be between 1 and 5" });
+        .json({ message: "Rating must be a valid number between 1 and 5" });
+    }
+
+    if (!comment || comment.trim().length === 0) {
+      return res.status(400).json({ message: "Comment is required" });
     }
 
     const product = await Product.findById(productId);
@@ -30,25 +40,59 @@ exports.addReview = async (req, res) => {
         .json({ message: "You have already reviewed this product" });
     }
 
+    // Check if the user has purchased and completed this product
+    const eligibleOrder = await Order.findOne({
+      buyer: userId,
+      status: { $in: ["Completed", "Shipped"] },
+      paymentStatus: "Paid",
+      "products.product": productId,
+    });
+    if (!eligibleOrder) {
+      return res.status(403).json({
+        message:
+          "You can only review products you have purchased and completed.",
+      });
+    }
+
     // Create a new review
+    console.log("Creating review with data:", {
+      user: userId,
+      product: productId,
+      rating: numericRating,
+      ratingType: typeof numericRating,
+      comment: comment.trim(),
+    });
+
     const review = await Review.create({
       user: userId,
       product: productId,
-      rating,
-      comment,
+      rating: numericRating,
+      comment: comment.trim(),
+    });
+
+    console.log("Review created:", {
+      id: review._id,
+      rating: review.rating,
+      ratingType: typeof review.rating,
     });
 
     // Add review to the product and recalculate average rating
     product.reviews.push(review._id);
-    await product.save(); // **This ensures the reviews array is updated in the database**
+    await product.save();
 
     await updateProductRating(productId);
-    await Order.updateOne(
-      { _id: orderId, "products.product": productId },
-      { $set: { "products.$.isRated": true } }
+
+    // Populate the user info for the response
+    const populatedReview = await Review.findById(review._id).populate(
+      "user",
+      "fullName email"
     );
 
-    res.status(201).json({ message: "Review added successfully", review });
+    res.status(201).json({
+      success: true,
+      message: "Review added successfully",
+      review: populatedReview,
+    });
   } catch (error) {
     console.error("Error adding review:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -60,12 +104,28 @@ exports.getReviews = async (req, res) => {
     const { productId } = req.params;
 
     const reviews = await Review.find({ product: productId })
-      .populate("user", "name email") // Fetch user's name and email
+      .populate("user", "fullName email") // Fetch user's fullName and email
       .sort({ createdAt: -1 });
 
-    res
-      .status(200)
-      .json({ message: "Reviews fetched successfully", data: reviews });
+    // Debug logging
+    console.log("=== GET REVIEWS DEBUG ===");
+    console.log("Product ID:", productId);
+    console.log("Reviews found:", reviews.length);
+    reviews.forEach((review, index) => {
+      console.log(`Review ${index + 1}:`, {
+        id: review._id,
+        rating: review.rating,
+        ratingType: typeof review.rating,
+        user: review.user?.fullName || review.user?._id,
+      });
+    });
+    console.log("=== END GET REVIEWS DEBUG ===");
+
+    res.status(200).json({
+      success: true,
+      message: "Reviews fetched successfully",
+      data: reviews,
+    });
   } catch (error) {
     console.error("Error fetching reviews:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -128,14 +188,33 @@ exports.deleteReview = async (req, res) => {
 async function updateProductRating(productId) {
   const reviews = await Review.find({ product: productId });
 
+  console.log("=== UPDATING PRODUCT RATING ===");
+  console.log("Product ID:", productId);
+  console.log("Total reviews found:", reviews.length);
+
+  reviews.forEach((review, index) => {
+    console.log(`Review ${index + 1}:`, {
+      id: review._id,
+      rating: review.rating,
+      ratingType: typeof review.rating,
+      user: review.user,
+    });
+  });
+
   const totalReviews = reviews.length;
   const avgRating =
     totalReviews > 0
       ? reviews.reduce((acc, review) => acc + review.rating, 0) / totalReviews
       : 0;
 
+  console.log("Calculated average rating:", avgRating);
+  console.log("Formatted average rating:", avgRating.toFixed(1));
+
   await Product.findByIdAndUpdate(productId, {
     ratings: avgRating.toFixed(1),
     reviewsCount: totalReviews,
   });
+
+  console.log("Product rating updated successfully");
+  console.log("=== END UPDATING PRODUCT RATING ===");
 }
