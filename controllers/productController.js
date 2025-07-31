@@ -785,22 +785,77 @@ exports.enhancedSearchSuggestions = async (req, res) => {
   }
 
   try {
-    // Find users with matching fullName first
+    // Normalize search query - remove extra spaces and convert to lowercase
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    // Create multiple search patterns for flexible matching
+    const searchPatterns = [
+      // Original query
+      normalizedQuery,
+      // Query with spaces removed (for "iphone" matching "I phone")
+      normalizedQuery.replace(/\s+/g, ""),
+      // Query with spaces added between characters (for "iphone" matching "i phone")
+      normalizedQuery.split("").join(" "),
+      // Individual words from query
+      ...normalizedQuery.split(/\s+/),
+    ];
+
+    // Create regex patterns for flexible matching
+    const regexPatterns = searchPatterns.map(
+      (pattern) =>
+        new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+    );
+
+    // Find users with matching fullName
     const matchingUsers = await User.find(
-      { fullName: { $regex: searchQuery, $options: "i" } },
+      {
+        fullName: {
+          $regex: normalizedQuery,
+          $options: "i",
+        },
+      },
       { _id: 1, fullName: 1 }
     );
 
     const userIds = matchingUsers.map((user) => user._id);
 
-    // Search products with comprehensive matching
+    // Enhanced product search with multiple matching strategies
     let products = await Product.find(
       {
         $or: [
-          { title: { $regex: searchQuery, $options: "i" } },
-          { brand: { $regex: searchQuery, $options: "i" } },
-          { model: { $regex: searchQuery, $options: "i" } },
-          { description: { $regex: searchQuery, $options: "i" } },
+          // Title matching with multiple patterns
+          { title: { $regex: normalizedQuery, $options: "i" } },
+          {
+            title: {
+              $regex: normalizedQuery.replace(/\s+/g, ""),
+              $options: "i",
+            },
+          },
+          {
+            title: {
+              $regex: normalizedQuery.split("").join("\\s*"),
+              $options: "i",
+            },
+          },
+          // Brand matching with multiple patterns
+          { brand: { $regex: normalizedQuery, $options: "i" } },
+          {
+            brand: {
+              $regex: normalizedQuery.replace(/\s+/g, ""),
+              $options: "i",
+            },
+          },
+          // Model matching with multiple patterns
+          { model: { $regex: normalizedQuery, $options: "i" } },
+          {
+            model: {
+              $regex: normalizedQuery.replace(/\s+/g, ""),
+              $options: "i",
+            },
+          },
+          // Description matching
+          { description: { $regex: normalizedQuery, $options: "i" } },
+          // Seller matching
           { user: { $in: userIds } },
         ],
         isActive: true,
@@ -829,9 +884,9 @@ exports.enhancedSearchSuggestions = async (req, res) => {
         ratings: -1,
         price: 1,
       })
-      .limit(5);
+      .limit(10);
 
-    // Create structured response
+    // Create structured response with enhanced relevance scoring
     const response = {
       products: products.map((product) => ({
         id: product._id,
@@ -846,43 +901,71 @@ exports.enhancedSearchSuggestions = async (req, res) => {
       suggestions: [],
     };
 
-    // Extract unique suggestions
-    const seenSuggestions = new Set();
+    // Enhanced suggestion extraction with relevance scoring
+    const suggestionMap = new Map();
 
     products.forEach((product) => {
-      if (
-        new RegExp(searchQuery, "i").test(product.title) &&
-        !seenSuggestions.has(product.title)
-      ) {
-        seenSuggestions.add(product.title);
-        response.suggestions.push(product.title);
+      // Score each field based on match quality
+      const scoreTitle = getMatchScore(
+        product.title,
+        normalizedQuery,
+        searchPatterns
+      );
+      const scoreBrand = getMatchScore(
+        product.brand,
+        normalizedQuery,
+        searchPatterns
+      );
+      const scoreModel = getMatchScore(
+        product.model,
+        normalizedQuery,
+        searchPatterns
+      );
+
+      // Add title suggestions
+      if (scoreTitle > 0 && !suggestionMap.has(product.title)) {
+        suggestionMap.set(product.title, {
+          text: product.title,
+          score: scoreTitle,
+          type: "title",
+        });
       }
-      if (
-        new RegExp(searchQuery, "i").test(product.brand) &&
-        !seenSuggestions.has(product.brand)
-      ) {
-        seenSuggestions.add(product.brand);
-        response.suggestions.push(product.brand);
+
+      // Add brand suggestions
+      if (scoreBrand > 0 && !suggestionMap.has(product.brand)) {
+        suggestionMap.set(product.brand, {
+          text: product.brand,
+          score: scoreBrand,
+          type: "brand",
+        });
       }
-      if (
-        new RegExp(searchQuery, "i").test(product.model) &&
-        !seenSuggestions.has(product.model)
-      ) {
-        seenSuggestions.add(product.model);
-        response.suggestions.push(product.model);
+
+      // Add model suggestions
+      if (scoreModel > 0 && !suggestionMap.has(product.model)) {
+        suggestionMap.set(product.model, {
+          text: product.model,
+          score: scoreModel,
+          type: "model",
+        });
       }
     });
 
     // Add seller suggestions
     matchingUsers.forEach((user) => {
-      if (!seenSuggestions.has(user.fullName)) {
-        seenSuggestions.add(user.fullName);
-        response.suggestions.push(user.fullName);
+      if (!suggestionMap.has(user.fullName)) {
+        suggestionMap.set(user.fullName, {
+          text: user.fullName,
+          score: 1,
+          type: "seller",
+        });
       }
     });
 
-    // Limit suggestions to top 8
-    response.suggestions = response.suggestions.slice(0, 8);
+    // Sort suggestions by score and extract text
+    response.suggestions = Array.from(suggestionMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((item) => item.text);
 
     res.status(200).json({
       message: "Enhanced search suggestions fetched successfully.",
@@ -895,3 +978,45 @@ exports.enhancedSearchSuggestions = async (req, res) => {
     });
   }
 };
+
+// Helper function to calculate match score
+function getMatchScore(text, query, patterns) {
+  if (!text) return 0;
+
+  const normalizedText = text.toLowerCase();
+  let score = 0;
+
+  // Exact match gets highest score
+  if (normalizedText === query) {
+    score += 10;
+  }
+
+  // Starts with query gets high score
+  if (normalizedText.startsWith(query)) {
+    score += 8;
+  }
+
+  // Contains query gets medium score
+  if (normalizedText.includes(query)) {
+    score += 6;
+  }
+
+  // Check against all patterns
+  patterns.forEach((pattern) => {
+    if (normalizedText.includes(pattern.toLowerCase())) {
+      score += 4;
+    }
+  });
+
+  // Check for word boundaries
+  const words = normalizedText.split(/\s+/);
+  const queryWords = query.split(/\s+/);
+
+  queryWords.forEach((queryWord) => {
+    if (words.some((word) => word.startsWith(queryWord))) {
+      score += 3;
+    }
+  });
+
+  return score;
+}
