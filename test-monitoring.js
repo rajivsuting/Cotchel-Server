@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-const BASE_URL = "http://localhost:5000/api";
+const BASE_URL = "https://starfish-app-6q6ot.ondigitalocean.app/api";
 
 // Test configuration
 const config = {

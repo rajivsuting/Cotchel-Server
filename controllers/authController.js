@@ -364,7 +364,6 @@ exports.addSellerDetails = async (req, res) => {
 
     // Update user
     user.sellerDetails = sellerDetails._id;
-    user.role = "Seller";
     user.isVerifiedSeller = false;
     const updatedUser = await user.save();
 

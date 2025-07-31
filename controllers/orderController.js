@@ -1027,3 +1027,216 @@ exports.getOrderById = async (req, res) => {
     });
   }
 };
+
+// Cancel order function
+exports.cancelOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Find the order and verify ownership
+    const order = await Order.findOne({
+      _id: id,
+      buyer: userId,
+      paymentStatus: "pending", // Only allow cancellation of pending orders
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        message: "Order not found or cannot be cancelled",
+      });
+    }
+
+    // Check if order is in a cancellable state
+    if (order.paymentStatus !== "pending" || order.status !== "pending") {
+      await session.abortTransaction();
+      return res.status(400).json({
+        message: "Order cannot be cancelled in its current state",
+      });
+    }
+
+    // Release reserved stock back to inventory
+    for (const item of order.products) {
+      await Product.findByIdAndUpdate(
+        item.product,
+        {
+          $inc: { quantityAvailable: item.quantity * item.lotSize },
+        },
+        { session }
+      );
+    }
+
+    // Update order status to cancelled
+    await Order.findByIdAndUpdate(
+      id,
+      {
+        status: "cancelled",
+        paymentStatus: "cancelled",
+        cancelledAt: new Date(),
+        cancellationReason: "User cancelled payment",
+      },
+      { session }
+    );
+
+    // If there's a Razorpay order ID, we should also cancel it on Razorpay's side
+    if (order.razorpayOrderId) {
+      try {
+        const razorpay = new Razorpay({
+          key_id: process.env.RAZORPAY_KEY_ID,
+          key_secret: process.env.RAZORPAY_KEY_SECRET,
+        });
+
+        // Attempt to close the Razorpay order
+        await razorpay.orders.edit(order.razorpayOrderId, {
+          notes: { cancelled: "User cancelled payment" },
+        });
+      } catch (razorpayError) {
+        console.error("Error cancelling Razorpay order:", razorpayError);
+        // Don't fail the entire cancellation if Razorpay fails
+      }
+    }
+
+    await session.commitTransaction();
+
+    res.status(200).json({
+      message: "Order cancelled successfully",
+      orderId: id,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Error cancelling order:", error);
+    res.status(500).json({
+      message: "Failed to cancel order",
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+// module.exports = {
+//   createOrderFromCart,
+//   createOrderFromBuyNow,
+//   verifyPayment,
+//   getAllOrders,
+//   getOrderById,
+//   cancelOrder,
+// };
+
+// Get all orders by payment transaction ID (for multi-seller orders)
+exports.getOrdersByPaymentTransactionId = async (req, res) => {
+  try {
+    const { paymentTransactionId } = req.params;
+    const { _id: userId, role } = req.user;
+
+    // Build the query based on user role
+    let query = { paymentTransactionId };
+    if (role === "Buyer") {
+      query.buyer = userId;
+    } else if (role === "Seller") {
+      query.seller = userId;
+    } else if (role !== "Admin") {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    const orders = await Order.find(query)
+      .populate({
+        path: "products.product",
+        model: "Product",
+        select: "title images featuredImage price",
+      })
+      .populate("buyer", "fullName email phone")
+      .populate({
+        path: "seller",
+        select: "fullName email phone sellerDetails",
+        populate: {
+          path: "sellerDetails",
+          select:
+            "businessName addressLine1 addressLine2 city state postalCode country",
+        },
+      })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    if (!orders.length) {
+      return res.status(404).json({ message: "Orders not found" });
+    }
+
+    // Format the orders response
+    const formattedOrders = orders.map((order) => ({
+      orderId: order._id,
+      buyer: {
+        name: order.buyer?.fullName || "Unknown Buyer",
+        email: order.buyer?.email,
+        phone: order.buyer?.phone,
+      },
+      seller: {
+        name: order.seller?.fullName || "Unknown Seller",
+        email: order.seller?.email,
+        phone: order.seller?.phone,
+        businessName: order.seller?.sellerDetails?.businessName,
+        address: order.seller?.sellerDetails
+          ? {
+              addressLine1: order.seller.sellerDetails.addressLine1,
+              addressLine2: order.seller.sellerDetails.addressLine2,
+              city: order.seller.sellerDetails.city,
+              state: order.seller.sellerDetails.state,
+              postalCode: order.seller.sellerDetails.postalCode,
+              country: order.seller.sellerDetails.country,
+            }
+          : null,
+      },
+      totalPrice: order.totalPrice,
+      paymentStatus: order.paymentStatus,
+      paymentTransactionId: order.paymentTransactionId,
+      status: order.status,
+      createdAt: order.createdAt,
+      address: order.address
+        ? {
+            street: order.address.street || "",
+            city: order.address.city || "",
+            state: order.address.state || "",
+            country: order.address.country || "",
+            pincode: order.address.pincode || "",
+            phone: order.address.phone || "",
+            name: order.address.name || "",
+          }
+        : null,
+      products: order.products.map((productItem) => {
+        const product = productItem.product || {};
+        return {
+          productId: product._id,
+          name: product.title || "Unknown Product",
+          images: product.images,
+          featuredImage: product.featuredImage,
+          quantity: productItem.quantity,
+          price: product.price,
+          totalPrice: productItem.quantity * product.price,
+        };
+      }),
+    }));
+
+    // Calculate total amount across all orders
+    const totalAmount = formattedOrders.reduce(
+      (sum, order) => sum + order.totalPrice,
+      0
+    );
+
+    res.status(200).json({
+      message: "Orders fetched successfully",
+      orders: formattedOrders,
+      totalAmount,
+      orderCount: formattedOrders.length,
+    });
+  } catch (err) {
+    console.error("Error fetching orders by payment transaction ID:", err);
+    res.status(500).json({
+      message: "Error fetching order details",
+      error: err.message,
+    });
+  }
+};

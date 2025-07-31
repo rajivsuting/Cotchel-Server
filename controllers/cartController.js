@@ -164,13 +164,11 @@ exports.getCart = async (req, res) => {
   try {
     const userId = req.user._id || req.user;
 
-    console.log("User ID:", userId);
-
     const cart = await Cart.findOne({ user: userId })
       .populate({
         path: "items.productId",
         select:
-          "title images featuredImage price category subCategory lotSize user sku length breadth weight height",
+          "title images featuredImage price category subCategory lotSize quantityAvailable user sku length breadth weight height",
         populate: [
           { path: "category", select: "name" },
           { path: "subCategory", select: "name" },

@@ -78,10 +78,16 @@ exports.getUserWishlist = async (req, res) => {
   const { _id: userId } = req.user;
 
   try {
-    const wishlist = await Wishlist.findOne({ userId }).populate(
-      "products.productId",
-      "title price compareAtPrice lotSize images featuredImage"
-    );
+    const wishlist = await Wishlist.findOne({ userId }).populate({
+      path: "products.productId",
+      select:
+        "title price compareAtPrice lotSize images featuredImage quantityAvailable description category subCategory brand model user",
+      populate: [
+        { path: "category", select: "name" },
+        { path: "subCategory", select: "name" },
+        { path: "user", select: "fullName" },
+      ],
+    });
 
     if (!wishlist) {
       return res.status(200).json({ wishlist: [] });

@@ -38,6 +38,13 @@ router.post(
 router.post("/webhook/payment", webhookController.handlePaymentWebhook);
 router.post("/webhook/shipment", webhookController.handleShipmentWebhook);
 
+// Get all orders by payment transaction ID (for multi-seller orders)
+router.get(
+  "/payment/:paymentTransactionId",
+  authMiddleware.verifyToken,
+  orderController.getOrdersByPaymentTransactionId
+);
+
 // Get order by ID
 router.get("/:id", authMiddleware.verifyToken, orderController.getOrderById);
 
