@@ -2,7 +2,7 @@ const axios = require("axios");
 const https = require("https");
 
 // Test configuration
-const BASE_URL = "http://localhost:5000";
+const BASE_URL = "https://starfish-app-6q6ot.ondigitalocean.app";
 const API_BASE = `${BASE_URL}/api`;
 
 // Colors for console output

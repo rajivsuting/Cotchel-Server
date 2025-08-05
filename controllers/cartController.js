@@ -135,7 +135,7 @@ exports.updateCartItem = async (req, res) => {
       .populate({
         path: "items.productId",
         select:
-          "title images featuredImage price category subCategory lotSize user sku length breadth weight height",
+          "title images featuredImage price category subCategory lotSize quantityAvailable user sku length breadth weight height",
         populate: [
           { path: "category", select: "name" },
           { path: "subCategory", select: "name" },
