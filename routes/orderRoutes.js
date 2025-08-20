@@ -48,4 +48,16 @@ router.get(
 // Get order by ID
 router.get("/:id", authMiddleware.verifyToken, orderController.getOrderById);
 
+// Handle payment cancellation
+router.post(
+  "/cancel-payment",
+  authMiddleware.verifyToken,
+  orderController.handlePaymentCancellation
+);
+
+// Test endpoint for stock restoration (development only)
+if (process.env.NODE_ENV === "development") {
+  router.post("/test-restore-stock", orderController.testRestoreStock);
+}
+
 module.exports = router;

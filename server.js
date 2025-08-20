@@ -176,6 +176,19 @@ app.use("/api/test", testRoutes);
 // Setup Socket.IO
 setupSocket(io);
 
+// Schedule abandoned payment cleanup every 15 minutes
+const orderController = require("./controllers/orderController");
+setInterval(async () => {
+  try {
+    const abandonedCount = await orderController.handleAbandonedPayments();
+    if (abandonedCount > 0) {
+      logger.info(`Cleaned up ${abandonedCount} abandoned payments`);
+    }
+  } catch (error) {
+    logger.error("Error in abandoned payment cleanup:", error);
+  }
+}, 15 * 60 * 1000); // 15 minutes
+
 // Connect to database and start server
 connectDb()
   .then(() => {

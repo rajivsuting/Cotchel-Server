@@ -51,6 +51,12 @@ exports.getAllTransactions = async (req, res) => {
         { _id: search },
         { "buyer.fullName": { $regex: search, $options: "i" } },
         { "seller.fullName": { $regex: search, $options: "i" } },
+        {
+          "seller.sellerDetails.businessName": {
+            $regex: search,
+            $options: "i",
+          },
+        },
       ];
     }
 
@@ -62,7 +68,14 @@ exports.getAllTransactions = async (req, res) => {
     // Fetch transactions with populated buyer and seller details
     const transactions = await Transaction.find(filter)
       .populate("buyer", "fullName email")
-      .populate("seller", "fullName email")
+      .populate({
+        path: "seller",
+        select: "fullName email sellerDetails",
+        populate: {
+          path: "sellerDetails",
+          select: "businessName",
+        },
+      })
       .populate("order", "status")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -127,8 +140,13 @@ exports.getAllTransactions = async (req, res) => {
       },
       seller: {
         id: transaction.seller?._id,
-        name: transaction.seller?.fullName,
+        name:
+          transaction.seller?.sellerDetails?.businessName ||
+          transaction.seller?.fullName,
+        businessName: transaction.seller?.sellerDetails?.businessName,
+        personalName: transaction.seller?.fullName,
         email: transaction.seller?.email,
+        isBusiness: !!transaction.seller?.sellerDetails?.businessName,
       },
       amount: transaction.amount,
       platformFee: transaction.platformFee,

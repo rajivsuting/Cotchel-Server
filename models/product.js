@@ -135,6 +135,11 @@ const productSchema = new mongoose.Schema(
         validate: {
           validator: function (value) {
             if (!value) return true; // Allow empty values
+            // Allow URLs (for uploaded files) and file paths
+            if (value.startsWith('http') || value.startsWith('/')) {
+              return true;
+            }
+            // Check file extension for local files
             return /\.(xls|xlsx|csv|pdf|doc|docx|ppt|pptx)$/i.test(value);
           },
           message:

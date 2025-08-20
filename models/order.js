@@ -8,6 +8,7 @@ const orderSchema = new mongoose.Schema({
         ref: "Product",
       },
       quantity: Number,
+      lotSize: Number, // Add lotSize field for consistency
       price: Number,
       totalPrice: Number,
       isRated: { type: Boolean, default: false },
@@ -40,6 +41,8 @@ const orderSchema = new mongoose.Schema({
     default: "Pending",
   },
   paymentTransactionId: String,
+  shipmentId: String, // Shiprocket shipment ID
+  shiprocketOrderId: String, // Shiprocket order ID
   address: {
     street: String,
     city: String,
@@ -55,6 +58,8 @@ const orderSchema = new mongoose.Schema({
   //   required: true,
   // },
   cartId: { type: mongoose.Schema.Types.ObjectId, ref: "Cart" },
+  cancelledAt: Date, // When the order was cancelled
+  cancellationReason: String, // Reason for cancellation
   statusHistory: [
     {
       status: String,

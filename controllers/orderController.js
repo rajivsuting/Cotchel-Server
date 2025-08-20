@@ -327,6 +327,161 @@ async function createSellerOrder(
   }
 }
 
+// Helper function to restore stock when payment fails
+async function restoreStock(items, session) {
+  console.log("=== Starting Stock Restoration ===");
+  console.log("Items to restore stock for:", JSON.stringify(items, null, 2));
+
+  for (const item of items) {
+    console.log(`Processing item:`, {
+      productId: item.product,
+      quantity: item.quantity,
+      lotSize: item.lotSize,
+      hasLotSize: !!item.lotSize,
+    });
+
+    // Find the product using the product ID from the order
+    const product = await Product.findById(item.product).session(session);
+    if (!product) {
+      console.error(`Product not found for stock restoration:`, item.product);
+      continue;
+    }
+
+    // Calculate quantity to restore based on the order structure
+    // For cart orders: quantity is the number of lots, lotSize is stored in the order
+    // For buy now orders: quantity is the number of lots, lotSize is stored in the order
+    let quantityToRestore;
+
+    if (item.lotSize) {
+      // Cart order or buy now order: quantity * lotSize
+      quantityToRestore = item.quantity * item.lotSize;
+      console.log(
+        `Cart/Buy Now order: ${item.quantity} lots × ${item.lotSize} units = ${quantityToRestore} total units`
+      );
+    } else {
+      // Fallback: assume quantity is already the total (for backward compatibility)
+      quantityToRestore = item.quantity;
+      console.log(
+        `Fallback calculation: ${item.quantity} units (no lotSize found)`
+      );
+    }
+
+    const oldStock = product.quantityAvailable;
+    product.quantityAvailable += quantityToRestore;
+    await product.save({ session });
+
+    console.log(
+      `Stock restored for ${product.title}: +${quantityToRestore} units (${oldStock} → ${product.quantityAvailable})`
+    );
+  }
+
+  console.log("=== Stock Restoration Completed ===");
+}
+
+// Helper function to handle failed payments and restore stock
+async function handlePaymentFailure(orderId, reason = "Payment failed") {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      throw new Error("Order not found");
+    }
+
+    // Restore stock
+    await restoreStock(order.products, session);
+
+    // Update order status
+    order.status = "Cancelled";
+    order.paymentStatus = "Failed";
+    order.cancelledAt = new Date();
+    order.cancellationReason = reason;
+    order.statusHistory.push({
+      status: "Cancelled",
+      note: reason,
+      timestamp: new Date(),
+    });
+
+    await order.save({ session });
+
+    // Clear cart if it exists
+    if (order.cartId) {
+      await Cart.findByIdAndDelete(order.cartId).session(session);
+    }
+
+    await session.commitTransaction();
+    console.log(
+      `Payment failure handled for order ${orderId}: Stock restored and order cancelled`
+    );
+
+    return order;
+  } catch (error) {
+    await session.abortTransaction();
+    console.error(
+      `Error handling payment failure for order ${orderId}:`,
+      error
+    );
+    throw error;
+  } finally {
+    session.endSession();
+  }
+}
+
+// Helper function to get seller display name
+function getSellerDisplayName(seller) {
+  if (!seller) return "Unknown Seller";
+
+  // Prioritize business name if available
+  if (seller.sellerDetails?.businessName) {
+    return seller.sellerDetails.businessName;
+  }
+
+  // Fallback to personal name
+  return seller.fullName || "Unknown Seller";
+}
+
+// Helper function to format seller information consistently
+function formatSellerInfo(seller) {
+  if (!seller) {
+    return {
+      businessName: "Unknown Seller",
+      personalName: "Unknown Seller",
+      email: null,
+      phone: null,
+      businessDetails: null,
+      isBusiness: false,
+    };
+  }
+
+  return {
+    businessName:
+      seller.sellerDetails?.businessName || seller.fullName || "Unknown Seller",
+    personalName: seller.fullName || "Unknown Seller",
+    email: seller.email,
+    phone: seller.phone,
+    businessDetails: seller.sellerDetails
+      ? {
+          gstin: seller.sellerDetails.gstin,
+          pan: seller.sellerDetails.pan,
+          bankName: seller.sellerDetails.bankName,
+          accountName: seller.sellerDetails.accountName,
+          ifscCode: seller.sellerDetails.ifscCode,
+          branch: seller.sellerDetails.branch,
+          address: {
+            addressLine1: seller.sellerDetails.addressLine1,
+            addressLine2: seller.sellerDetails.addressLine2,
+            city: seller.sellerDetails.city,
+            state: seller.sellerDetails.state,
+            postalCode: seller.sellerDetails.postalCode,
+            country: seller.sellerDetails.country,
+          },
+        }
+      : null,
+    isBusiness: !!seller.sellerDetails?.businessName,
+  };
+}
+
 // Create Order from Cart
 exports.createOrderFromCart = async (req, res) => {
   const session = await mongoose.startSession();
@@ -532,6 +687,32 @@ exports.verifyPayment = async (req, res) => {
 
     const payment = await razorpay.payments.fetch(payment_id);
 
+    // Check if payment actually succeeded
+    if (payment.status !== "captured") {
+      // Payment failed or is pending, restore stock and cancel orders
+      console.log(
+        `Payment verification failed for orders with transaction ID ${order_id}. Payment status: ${payment.status}`
+      );
+
+      await session.abortTransaction();
+      session.endSession();
+
+      // Handle payment failure for all orders
+      await Promise.all(
+        orders.map((order) =>
+          handlePaymentFailure(
+            order._id,
+            `Payment verification failed: ${payment.status}`
+          )
+        )
+      );
+
+      return res.status(400).json({
+        message: "Payment verification failed",
+        details: `Payment status: ${payment.status}`,
+      });
+    }
+
     // Get platform fee percentage from settings
     const platformSettings = await PlatformSettings.findOne()
       .sort({
@@ -706,7 +887,8 @@ exports.createOrderFromBuyNow = async (req, res) => {
       products: [
         {
           product: product._id,
-          quantity: totalQuantity, // Store actual quantity
+          quantity: quantity, // Store the number of lots requested
+          lotSize: product.lotSize, // Include lotSize for consistency
           price: product.price,
           totalPrice,
         },
@@ -845,7 +1027,15 @@ exports.getAllOrders = async (req, res) => {
           select: "title images featuredImage",
         })
         .populate("buyer", "fullName")
-        .populate("seller", "fullName")
+        .populate({
+          path: "seller",
+          select: "fullName email sellerDetails",
+          populate: {
+            path: "sellerDetails",
+            select:
+              "businessName gstin pan bankName accountName ifscCode branch addressLine1 addressLine2 city state postalCode country",
+          },
+        })
         .lean()
         .exec(),
       Order.countDocuments(filter),
@@ -875,7 +1065,7 @@ exports.getAllOrders = async (req, res) => {
     const formattedOrders = orders.map((order) => ({
       orderId: order._id,
       buyer: order.buyer?.fullName || "Unknown Buyer",
-      seller: order.seller?.fullName || "Unknown Seller",
+      seller: formatSellerInfo(order.seller),
       totalPrice: order.totalPrice,
       paymentStatus: order.paymentStatus,
       status: order.status,
@@ -952,7 +1142,7 @@ exports.getOrderById = async (req, res) => {
         populate: {
           path: "sellerDetails",
           select:
-            "businessName addressLine1 addressLine2 city state postalCode country",
+            "businessName gstin pan bankName accountName ifscCode branch addressLine1 addressLine2 city state postalCode country",
         },
       })
       .lean();
@@ -969,22 +1159,7 @@ exports.getOrderById = async (req, res) => {
         email: order.buyer?.email,
         phone: order.buyer?.phone,
       },
-      seller: {
-        name: order.seller?.fullName || "Unknown Seller",
-        email: order.seller?.email,
-        phone: order.seller?.phone,
-        businessName: order.seller?.sellerDetails?.businessName,
-        address: order.seller?.sellerDetails
-          ? {
-              addressLine1: order.seller.sellerDetails.addressLine1,
-              addressLine2: order.seller.sellerDetails.addressLine2,
-              city: order.seller.sellerDetails.city,
-              state: order.seller.sellerDetails.state,
-              postalCode: order.seller.sellerDetails.postalCode,
-              country: order.seller.sellerDetails.country,
-            }
-          : null,
-      },
+      seller: formatSellerInfo(order.seller),
       totalPrice: order.totalPrice,
       paymentStatus: order.paymentStatus,
       paymentTransactionId: order.paymentTransactionId,
@@ -1118,6 +1293,117 @@ exports.cancelOrder = async (req, res) => {
   }
 };
 
+// Handle payment cancellation or timeout
+exports.handlePaymentCancellation = async (req, res) => {
+  try {
+    const { orderId, reason = "Payment cancelled by user" } = req.body;
+    const { _id: userId } = req.user;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "Order ID is required" });
+    }
+
+    // Find the order and verify ownership
+    const order = await Order.findOne({
+      _id: orderId,
+      buyer: userId,
+      paymentStatus: "Pending",
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        message: "Order not found or cannot be cancelled",
+      });
+    }
+
+    // Handle the cancellation
+    await handlePaymentFailure(orderId, reason);
+
+    res.status(200).json({
+      message: "Payment cancelled successfully",
+      orderId: orderId,
+    });
+  } catch (error) {
+    console.error("Error handling payment cancellation:", error);
+    res.status(500).json({
+      message: "Failed to cancel payment",
+      error: error.message,
+    });
+  }
+};
+
+// Handle abandoned payments (timeout mechanism)
+exports.handleAbandonedPayments = async () => {
+  try {
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago
+
+    // Find orders that are pending payment for more than 30 minutes
+    const abandonedOrders = await Order.find({
+      paymentStatus: "Pending",
+      status: "Pending",
+      createdAt: { $lt: thirtyMinutesAgo },
+    });
+
+    console.log(`Found ${abandonedOrders.length} abandoned orders`);
+
+    // Handle each abandoned order
+    for (const order of abandonedOrders) {
+      try {
+        await handlePaymentFailure(order._id, "Payment abandoned - timeout");
+        console.log(`Abandoned order ${order._id} handled successfully`);
+      } catch (error) {
+        console.error(`Error handling abandoned order ${order._id}:`, error);
+      }
+    }
+
+    return abandonedOrders.length;
+  } catch (error) {
+    console.error("Error handling abandoned payments:", error);
+    throw error;
+  }
+};
+
+// Test endpoint for stock restoration (development only)
+exports.testRestoreStock = async (req, res) => {
+  try {
+    const { orderId } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "Order ID is required" });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    console.log("=== Testing Stock Restoration ===");
+    console.log("Order:", {
+      id: order._id,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      products: order.products,
+    });
+
+    // Test the restoreStock function
+    await restoreStock(order.products, null);
+
+    res.status(200).json({
+      message: "Stock restoration test completed",
+      order: {
+        id: order._id,
+        products: order.products,
+      },
+    });
+  } catch (error) {
+    console.error("Error in test restore stock:", error);
+    res.status(500).json({
+      message: "Error testing stock restoration",
+      error: error.message,
+    });
+  }
+};
+
 // module.exports = {
 //   createOrderFromCart,
 //   createOrderFromBuyNow,
@@ -1156,7 +1442,7 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
         populate: {
           path: "sellerDetails",
           select:
-            "businessName addressLine1 addressLine2 city state postalCode country",
+            "businessName gstin pan bankName accountName ifscCode branch addressLine1 addressLine2 city state postalCode country",
         },
       })
       .sort({ createdAt: 1 })
@@ -1174,22 +1460,7 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
         email: order.buyer?.email,
         phone: order.buyer?.phone,
       },
-      seller: {
-        name: order.seller?.fullName || "Unknown Seller",
-        email: order.seller?.email,
-        phone: order.seller?.phone,
-        businessName: order.seller?.sellerDetails?.businessName,
-        address: order.seller?.sellerDetails
-          ? {
-              addressLine1: order.seller.sellerDetails.addressLine1,
-              addressLine2: order.seller.sellerDetails.addressLine2,
-              city: order.seller.sellerDetails.city,
-              state: order.seller.sellerDetails.state,
-              postalCode: order.seller.sellerDetails.postalCode,
-              country: order.seller.sellerDetails.country,
-            }
-          : null,
-      },
+      seller: formatSellerInfo(order.seller),
       totalPrice: order.totalPrice,
       paymentStatus: order.paymentStatus,
       paymentTransactionId: order.paymentTransactionId,

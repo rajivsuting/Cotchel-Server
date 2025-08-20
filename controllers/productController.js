@@ -39,6 +39,17 @@ exports.createProduct = async (req, res) => {
       weight,
     } = req.body;
 
+    // Debug logging for files
+    console.log("=== CREATE PRODUCT DEBUG ===");
+    console.log("Files received:", files);
+    console.log("Files type:", typeof files);
+    console.log(
+      "Files length:",
+      Array.isArray(files) ? files.length : "Not an array"
+    );
+    console.log("Files content:", files);
+    console.log("=== END DEBUG ===");
+
     if (!req.user || !req.user._id) {
       return res.status(401).json({ message: "Unauthorized: User ID missing" });
     }
@@ -97,11 +108,23 @@ exports.createProduct = async (req, res) => {
 
     const sku = generateSKU(title, model, brand, category);
 
+    // Ensure files is an array and filter out any empty values
+    const fileAttachments = Array.isArray(files)
+      ? files.filter(
+          (file) => file && (typeof file === "string" ? file.trim() : true)
+        )
+      : [];
+
+    console.log("=== PROCESSED FILES ===");
+    console.log("Original files:", files);
+    console.log("Processed fileAttachments:", fileAttachments);
+    console.log("=== END PROCESSED FILES ===");
+
     const newProduct = new Product({
       title,
       description,
       images,
-      fileAttachments: files,
+      fileAttachments: fileAttachments,
       category,
       subCategory,
       quantityAvailable: parsedQuantity,
@@ -122,7 +145,11 @@ exports.createProduct = async (req, res) => {
 
     await newProduct.save();
 
-    console.log(newProduct);
+    console.log("=== SAVED PRODUCT ===");
+    console.log("Product ID:", newProduct._id);
+    console.log("File Attachments saved:", newProduct.fileAttachments);
+    console.log("=== END SAVED PRODUCT ===");
+
     res
       .status(201)
       .json({ message: "Product created successfully", product: newProduct });
@@ -288,7 +315,14 @@ exports.getAllProducts = async (req, res) => {
         .populate("category")
         .populate("subCategory")
         .populate("brand")
-        .populate({ path: "user", select: "fullName isVerifiedSeller" })
+        .populate({
+          path: "user",
+          select: "fullName sellerDetails",
+          populate: {
+            path: "sellerDetails",
+            select: "businessName",
+          },
+        })
         .lean(),
       Product.countDocuments(filter),
     ]);
@@ -896,7 +930,10 @@ exports.enhancedSearchSuggestions = async (req, res) => {
         compareAtPrice: product.compareAtPrice,
         image: product.featuredImage,
         ratings: product.ratings || 0,
-        seller: product.user?.fullName || "Unknown Seller",
+        seller:
+          product.user?.sellerDetails?.businessName ||
+          product.user?.fullName ||
+          "Unknown Seller",
       })),
       suggestions: [],
     };

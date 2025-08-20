@@ -46,15 +46,28 @@ exports.register = async (req, res) => {
       emailVerificationCode: verificationCode,
     });
 
-    await sendEmail(email, "Email Verification Code", {
-      text: `Your verification code is: ${verificationCode}`,
-      html: `<p>Your verification code is: <strong>${verificationCode}</strong></p>`,
-    });
+    try {
+      await sendEmail(email, "Email Verification Code", {
+        text: `Your verification code is: ${verificationCode}`,
+        html: `<p>Your verification code is: <strong>${verificationCode}</strong></p>`,
+      });
 
-    res.status(200).json({
-      message: "Verification code sent to email.",
-      userId: newUser._id,
-    });
+      res.status(200).json({
+        message: "Verification code sent to email.",
+        userId: newUser._id,
+      });
+    } catch (emailError) {
+      console.error("Email sending failed:", emailError);
+
+      // Still allow registration to succeed, but inform user
+      res.status(200).json({
+        message:
+          "User registered successfully, but email verification failed. Please contact support.",
+        userId: newUser._id,
+        emailError: true,
+        verificationCode: verificationCode, // Temporary - remove in production
+      });
+    }
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error registering user." });
