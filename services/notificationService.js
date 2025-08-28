@@ -121,6 +121,16 @@ class NotificationService {
   static async markAsRead(notificationId) {
     try {
       console.log("Marking notification as read:", notificationId);
+
+      // First check if notification exists
+      const existingNotification = await Notification.findById(notificationId);
+      console.log("Existing notification:", existingNotification);
+
+      if (!existingNotification) {
+        console.log("Notification not found in database");
+        return null;
+      }
+
       const notification = await Notification.findByIdAndUpdate(
         notificationId,
         { read: true },
@@ -134,7 +144,8 @@ class NotificationService {
     }
   }
 
-  async markAllAsRead(sellerId) {
+  // Mark all notifications as read
+  static async markAllAsRead(sellerId) {
     try {
       console.log("Marking all notifications as read for seller:", sellerId);
       const result = await Notification.updateMany(

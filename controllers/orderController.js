@@ -1496,6 +1496,7 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
       (sum, order) => sum + order.totalPrice,
       0
     );
+    // console.log("formattedOrders: " + formattedOrders);
 
     res.status(200).json({
       message: "Orders fetched successfully",

@@ -293,6 +293,7 @@ exports.getAllProducts = async (req, res) => {
     // Apply role-based filters last to avoid conflicts
     if (role === "Buyer") {
       filter.quantityAvailable = { $gt: 0 };
+      filter.isActive = true; // Only show active products to buyers
     } else if (role === "Seller") {
       filter.user = userId;
     }
@@ -371,9 +372,25 @@ exports.getProductById = async (req, res, next) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
+    // Check if product is active for buyers
+    const user = req.user || {};
+    if (user.role === "Buyer" && !product.isActive) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Check if seller is trying to access someone else's deactivated product
+    if (
+      user.role === "Seller" &&
+      !product.isActive &&
+      product.user._id.toString() !== user._id?.toString()
+    ) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
     const relatedProducts = await Product.find({
       category: product.category._id,
       _id: { $ne: product._id },
+      isActive: true, // Only show active related products
     })
       .limit(5)
       .populate("category", "name");

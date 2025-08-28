@@ -48,20 +48,28 @@ class NotificationController {
   static async markAsRead(req, res) {
     try {
       const { notificationId } = req.params;
+      console.log("Marking notification as read:", notificationId);
+      console.log("User:", req.user._id);
+
       const notification = await NotificationService.markAsRead(notificationId);
 
+      console.log("Notification marked as read result:", notification);
+
       if (!notification) {
+        console.log("Notification not found");
         return res.status(404).json({
           success: false,
           message: "Notification not found",
         });
       }
 
+      console.log("Successfully marked notification as read");
       res.status(200).json({
         success: true,
         data: notification,
       });
     } catch (error) {
+      console.error("Error in markAsRead:", error);
       res.status(500).json({
         success: false,
         message: error.message,
@@ -72,14 +80,20 @@ class NotificationController {
   // Mark all notifications as read
   static async markAllAsRead(req, res) {
     try {
-      const sellerId = req.user.id; // Updated to use req.user.id instead of req.user._id
-      await Notification.updateMany({ sellerId, read: false }, { read: true });
+      const sellerId = req.user._id; // Use _id consistently with other methods
+      console.log("Marking all notifications as read for seller:", sellerId);
+
+      const result = await NotificationService.markAllAsRead(sellerId);
+
+      console.log("Mark all as read result:", result);
 
       res.status(200).json({
         success: true,
         message: "All notifications marked as read",
+        data: result,
       });
     } catch (error) {
+      console.error("Error in markAllAsRead:", error);
       res.status(500).json({
         success: false,
         message: error.message,

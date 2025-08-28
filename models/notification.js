@@ -20,9 +20,10 @@ const notificationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
     required: true,
+    index: true,
   },
-  timestamp: { type: Date, default: Date.now },
-  read: { type: Boolean, default: false },
+  timestamp: { type: Date, default: Date.now, index: true },
+  read: { type: Boolean, default: false, index: true },
   // Additional fields for seller notifications
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: "Order" },
   productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
@@ -33,5 +34,8 @@ const notificationSchema = new mongoose.Schema({
     enum: ["pending", "approved", "rejected"],
   },
 });
+
+// Compound index for efficient queries
+notificationSchema.index({ sellerId: 1, read: 1, timestamp: -1 });
 
 module.exports = mongoose.model("Notification", notificationSchema);
