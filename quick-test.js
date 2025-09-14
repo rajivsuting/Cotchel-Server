@@ -1,6 +1,6 @@
 const http = require("http");
 
-const BASE_URL = "https://starfish-app-6q6ot.ondigitalocean.app";
+const BASE_URL = "http://localhost:5000";
 
 console.log("🔍 Quick Security Test for Cotchel Server");
 console.log("==========================================\n");

@@ -42,7 +42,7 @@ async function createShiprocketShipment(order) {
     // Get seller details with populated sellerDetails
     console.log("Fetching seller details...");
     const seller = await User.findById(order.seller)
-      .select("name email phone sellerDetails")
+      .select("name email phoneNumber sellerDetails")
       .populate("sellerDetails");
 
     if (!seller) {
@@ -459,7 +459,7 @@ function formatSellerInfo(seller) {
       seller.sellerDetails?.businessName || seller.fullName || "Unknown Seller",
     personalName: seller.fullName || "Unknown Seller",
     email: seller.email,
-    phone: seller.phone,
+    phone: seller.phoneNumber,
     businessDetails: seller.sellerDetails
       ? {
           gstin: seller.sellerDetails.gstin,
@@ -1089,6 +1089,7 @@ exports.getAllOrders = async (req, res) => {
           images: product.images,
           featuredImage: product.featuredImage,
           quantity: productItem.quantity,
+          lotSize: productItem.lotSize,
           price: productItem.price,
           totalPrice: productItem.totalPrice,
           userRating: userRatings.get(product._id?.toString()) || null,
@@ -1138,7 +1139,7 @@ exports.getOrderById = async (req, res) => {
       .populate("buyer", "fullName email phone")
       .populate({
         path: "seller",
-        select: "fullName email phone sellerDetails",
+        select: "fullName email phoneNumber sellerDetails",
         populate: {
           path: "sellerDetails",
           select:
@@ -1152,6 +1153,7 @@ exports.getOrderById = async (req, res) => {
     }
 
     // Format the order response
+    console.log("Raw order from DB:", JSON.stringify(order.products, null, 2));
     const formattedOrder = {
       orderId: order._id,
       buyer: {
@@ -1178,14 +1180,23 @@ exports.getOrderById = async (req, res) => {
         : null,
       products: order.products.map((productItem) => {
         const product = productItem.product || {};
+        console.log("Mapping product item:", {
+          productId: product._id,
+          name: product.title,
+          quantity: productItem.quantity,
+          lotSize: productItem.lotSize,
+          price: product.price,
+          totalPrice: productItem.totalPrice,
+        });
         return {
           productId: product._id,
           name: product.title || "Unknown Product",
           images: product.images,
           featuredImage: product.featuredImage,
           quantity: productItem.quantity,
+          lotSize: productItem.lotSize,
           price: product.price,
-          totalPrice: productItem.quantity * product.price,
+          totalPrice: productItem.totalPrice,
         };
       }),
     };
@@ -1438,7 +1449,7 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
       .populate("buyer", "fullName email phone")
       .populate({
         path: "seller",
-        select: "fullName email phone sellerDetails",
+        select: "fullName email phoneNumber sellerDetails",
         populate: {
           path: "sellerDetails",
           select:
@@ -1453,6 +1464,10 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
     }
 
     // Format the orders response
+    console.log(
+      "Raw orders from DB:",
+      orders.map((o) => ({ id: o._id, products: o.products }))
+    );
     const formattedOrders = orders.map((order) => ({
       orderId: order._id,
       buyer: {
@@ -1479,14 +1494,26 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
         : null,
       products: order.products.map((productItem) => {
         const product = productItem.product || {};
+        console.log(
+          "Mapping product item in getOrdersByPaymentTransactionId:",
+          {
+            productId: product._id,
+            name: product.title,
+            quantity: productItem.quantity,
+            lotSize: productItem.lotSize,
+            price: product.price,
+            totalPrice: productItem.totalPrice,
+          }
+        );
         return {
           productId: product._id,
           name: product.title || "Unknown Product",
           images: product.images,
           featuredImage: product.featuredImage,
           quantity: productItem.quantity,
+          lotSize: productItem.lotSize,
           price: product.price,
-          totalPrice: productItem.quantity * product.price,
+          totalPrice: productItem.totalPrice,
         };
       }),
     }));
