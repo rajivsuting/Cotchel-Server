@@ -20,10 +20,31 @@ router.get(
   authMiddleware.verifyToken,
   authController.getUserProfile
 );
-router.get("/me", authMiddleware.verifyToken, (req, res) => {
-  return res.status(200).json({
-    user: req.user,
-  });
+router.get("/me", authMiddleware.verifyToken, async (req, res) => {
+  try {
+    const user = await require("../models/User")
+      .findById(req.user._id)
+      .populate({
+        path: "sellerDetails",
+        select:
+          "businessName gstin pan bankName accountName accountNumber ifscCode branch addressLine1 addressLine2 city state postalCode country",
+      });
+
+    if (!user) {
+      return res.status(404).json({
+        user: null,
+      });
+    }
+
+    return res.status(200).json({
+      user: user,
+    });
+  } catch (error) {
+    console.error("Error fetching user:", error);
+    return res.status(500).json({
+      user: null,
+    });
+  }
 });
 router.patch("/edit", authMiddleware.verifyToken, authController.editUser);
 // router.get("/get/:id", authController.getUserById);
@@ -52,6 +73,13 @@ router.put(
   "/update-last-active-role",
   authMiddleware.verifyToken,
   authController.updateLastActiveRole
+);
+
+// Update seller details
+router.patch(
+  "/seller-details/update",
+  authMiddleware.verifyToken,
+  authController.updateSellerDetails
 );
 
 module.exports = router;

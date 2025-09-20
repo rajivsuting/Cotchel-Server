@@ -380,6 +380,9 @@ exports.addSellerDetails = async (req, res) => {
     user.isVerifiedSeller = false;
     const updatedUser = await user.save();
 
+    // Populate the seller details for the response
+    await updatedUser.populate("sellerDetails");
+
     try {
       const pickupData = {
         pickup_location: `Pickup_${user._id}`, // Ensure uniqueness
@@ -399,6 +402,23 @@ exports.addSellerDetails = async (req, res) => {
         shiprocketToken,
         pickupData
       );
+      const { accessToken, refreshToken } = createTokens(user);
+
+      const isProduction = process.env.NODE_ENV === "production";
+
+      res.cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "None" : "Lax",
+        maxAge: 3600000 * 24 * 7,
+      });
+
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "None" : "Lax",
+        maxAge: 3600000 * 24 * 7,
+      });
 
       console.log("Shiprocket Pickup Added:", shiprocketResponse);
     } catch (err) {
@@ -416,6 +436,7 @@ exports.addSellerDetails = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Seller details added successfully.",
+      user: updatedUser,
       data: {
         sellerDetails,
         updatedUser,
@@ -1020,5 +1041,69 @@ exports.updateLastActiveRole = async (req, res) => {
   } catch (error) {
     console.error("Error updating last active role:", error);
     res.status(500).json({ error: "Error updating role" });
+  }
+};
+
+exports.updateSellerDetails = async (req, res) => {
+  try {
+    const { _id: userId } = req.user;
+    const sellerDetailsUpdates = req.body;
+
+    // Fetch the user document
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    if (!user.sellerDetails) {
+      return res.status(404).json({
+        success: false,
+        message: "No seller details found for this user.",
+      });
+    }
+
+    // Update seller details
+    const updatedSellerDetails = await SellerDetails.findByIdAndUpdate(
+      user.sellerDetails,
+      { $set: sellerDetailsUpdates },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedSellerDetails) {
+      return res.status(404).json({
+        success: false,
+        message: "Seller details not found.",
+      });
+    }
+
+    // Refetch user with updated seller details
+    const updatedUser = await User.findById(userId)
+      .populate({
+        path: "addresses",
+        select:
+          "name phone addressLine1 addressLine2 city state postalCode country isDefault",
+      })
+      .populate({
+        path: "sellerDetails",
+        select:
+          "businessName gstin pan bankName accountName accountNumber ifscCode branch addressLine1 addressLine2 city state postalCode country",
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: "Seller details updated successfully.",
+      data: updatedUser,
+    });
+  } catch (error) {
+    console.error("Error updating seller details:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while updating seller details.",
+      error: error.message,
+    });
   }
 };

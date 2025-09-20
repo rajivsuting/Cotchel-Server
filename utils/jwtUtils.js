@@ -7,7 +7,9 @@ const createTokens = (user) => {
       role: user.role,
       name: user.fullName,
       isVerifiedSeller: user.isVerifiedSeller,
-      sellerDetails: user.sellerDetails,
+      sellerDetails: user.sellerDetails
+        ? user.sellerDetails._id || user.sellerDetails
+        : null,
     },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
