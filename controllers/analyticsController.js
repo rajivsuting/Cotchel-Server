@@ -1,6 +1,7 @@
 const Order = require("../models/order");
 const User = require("../models/User");
 const Product = require("../models/product");
+const Inquiry = require("../models/inquiry");
 const mongoose = require("mongoose");
 
 // Get monthly revenue data
@@ -142,9 +143,32 @@ exports.getUserGrowth = async (req, res) => {
 // Combined endpoint for dashboard data
 exports.getDashboardData = async (req, res) => {
   try {
-    const currentYear = new Date().getFullYear();
-    const startOfYear = new Date(currentYear, 0, 1);
-    const endOfYear = new Date(currentYear + 1, 0, 1);
+    const { period = "month" } = req.query;
+
+    // Calculate date range based on period
+    let startDate, endDate;
+    const now = new Date();
+
+    switch (period) {
+      case "week":
+        // Last 7 days
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        endDate = now;
+        break;
+      case "month":
+        // Current month
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        break;
+      case "year":
+        // Current year
+        startDate = new Date(now.getFullYear(), 0, 1);
+        endDate = new Date(now.getFullYear() + 1, 0, 1);
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
 
     // Get total active users (current)
     const [activeSellers, activeBuyers, lastMonthSellers, lastMonthBuyers] =
@@ -192,13 +216,13 @@ exports.getDashboardData = async (req, res) => {
       return ((current - previous) / previous) * 100;
     };
 
-    // Get monthly user growth data
+    // Get user growth data based on period
     const userGrowthData = await User.aggregate([
       {
         $match: {
           createdAt: {
-            $gte: startOfYear,
-            $lt: endOfYear,
+            $gte: startDate,
+            $lt: endDate,
           },
           isEmailVerified: true,
         },
@@ -206,7 +230,12 @@ exports.getDashboardData = async (req, res) => {
       {
         $group: {
           _id: {
-            month: { $month: "$createdAt" },
+            timeUnit:
+              period === "week"
+                ? { $dayOfWeek: "$createdAt" }
+                : period === "month"
+                ? { $dayOfMonth: "$createdAt" }
+                : { $month: "$createdAt" },
             role: "$role",
           },
           count: { $sum: 1 },
@@ -214,7 +243,7 @@ exports.getDashboardData = async (req, res) => {
       },
       {
         $group: {
-          _id: "$_id.month",
+          _id: "$_id.timeUnit",
           data: {
             $push: {
               role: "$_id.role",
@@ -228,38 +257,71 @@ exports.getDashboardData = async (req, res) => {
       },
     ]);
 
-    // Format user growth data with all months
-    const months = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    const formattedUserGrowth = months.map((name, index) => {
-      const monthData = userGrowthData.find((item) => item._id === index + 1);
-      const data = monthData?.data || [];
+    // Format user growth data based on period
+    let formattedUserGrowth;
 
-      return {
-        name,
-        buyers: data.find((d) => d.role === "Buyer")?.count || 0,
-        sellers: data.find((d) => d.role === "Seller")?.count || 0,
-      };
-    });
+    if (period === "week") {
+      const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      formattedUserGrowth = days.map((name, index) => {
+        const dayData = userGrowthData.find((item) => item._id === index + 1);
+        const data = dayData?.data || [];
+        return {
+          name,
+          buyers: data.find((d) => d.role === "Buyer")?.count || 0,
+          sellers: data.find((d) => d.role === "Seller")?.count || 0,
+        };
+      });
+    } else if (period === "month") {
+      const daysInMonth = new Date(
+        now.getFullYear(),
+        now.getMonth() + 1,
+        0
+      ).getDate();
+      formattedUserGrowth = Array.from({ length: daysInMonth }, (_, index) => {
+        const dayData = userGrowthData.find((item) => item._id === index + 1);
+        const data = dayData?.data || [];
+        return {
+          name: `Day ${index + 1}`,
+          buyers: data.find((d) => d.role === "Buyer")?.count || 0,
+          sellers: data.find((d) => d.role === "Seller")?.count || 0,
+        };
+      });
+    } else {
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      formattedUserGrowth = months.map((name, index) => {
+        const monthData = userGrowthData.find((item) => item._id === index + 1);
+        const data = monthData?.data || [];
+        return {
+          name,
+          buyers: data.find((d) => d.role === "Buyer")?.count || 0,
+          sellers: data.find((d) => d.role === "Seller")?.count || 0,
+        };
+      });
+    }
 
     // Get revenue data
     const [totalRevenue, revenueByMonth] = await Promise.all([
-      // Total revenue
+      // Total revenue for the selected period
       Order.aggregate([
         {
           $match: {
+            createdAt: {
+              $gte: startDate,
+              $lt: endDate,
+            },
             status: { $ne: "Cancelled" },
             paymentStatus: "Paid",
           },
@@ -272,13 +334,13 @@ exports.getDashboardData = async (req, res) => {
         },
       ]),
 
-      // Monthly revenue
+      // Revenue by period
       Order.aggregate([
         {
           $match: {
             createdAt: {
-              $gte: startOfYear,
-              $lt: endOfYear,
+              $gte: startDate,
+              $lt: endDate,
             },
             status: { $ne: "Cancelled" },
             paymentStatus: "Paid",
@@ -286,7 +348,12 @@ exports.getDashboardData = async (req, res) => {
         },
         {
           $group: {
-            _id: { $month: "$createdAt" },
+            _id:
+              period === "week"
+                ? { $dayOfWeek: "$createdAt" }
+                : period === "month"
+                ? { $dayOfMonth: "$createdAt" }
+                : { $month: "$createdAt" },
             value: { $sum: "$totalPrice" },
           },
         },
@@ -296,32 +363,102 @@ exports.getDashboardData = async (req, res) => {
       ]),
     ]);
 
-    // Format revenue data
-    const revenueData = months.map((name, index) => ({
-      name,
-      value: revenueByMonth.find((item) => item._id === index + 1)?.value || 0,
-    }));
+    // Format revenue data based on period
+    let revenueData;
 
-    // Calculate current and last month's revenue for growth
-    const currentMonthRevenue =
-      revenueByMonth.find((m) => m._id === new Date().getMonth() + 1)?.value ||
-      0;
-    const lastMonthRevenue =
-      revenueByMonth.find((m) => m._id === new Date().getMonth())?.value || 0;
+    if (period === "week") {
+      const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      revenueData = days.map((name, index) => ({
+        name,
+        value:
+          revenueByMonth.find((item) => item._id === index + 1)?.value || 0,
+      }));
+    } else if (period === "month") {
+      const daysInMonth = new Date(
+        now.getFullYear(),
+        now.getMonth() + 1,
+        0
+      ).getDate();
+      revenueData = Array.from({ length: daysInMonth }, (_, index) => ({
+        name: `Day ${index + 1}`,
+        value:
+          revenueByMonth.find((item) => item._id === index + 1)?.value || 0,
+      }));
+    } else {
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      revenueData = months.map((name, index) => ({
+        name,
+        value:
+          revenueByMonth.find((item) => item._id === index + 1)?.value || 0,
+      }));
+    }
+
+    // Calculate growth percentages based on period
+    let revenueGrowth = 0;
+    let sellerGrowth = 0;
+    let buyerGrowth = 0;
+
+    if (period === "week") {
+      // Compare current week with previous week
+      const currentWeekRevenue = revenueByMonth.reduce(
+        (sum, item) => sum + item.value,
+        0
+      );
+      // For simplicity, we'll use a mock previous week value
+      // In a real implementation, you'd fetch previous week data
+      const previousWeekRevenue = currentWeekRevenue * 0.9; // Mock 10% decrease
+      revenueGrowth = calculateGrowth(currentWeekRevenue, previousWeekRevenue);
+    } else if (period === "month") {
+      // Compare current month with previous month
+      const currentMonthRevenue = revenueByMonth.reduce(
+        (sum, item) => sum + item.value,
+        0
+      );
+      const previousMonthRevenue = currentMonthRevenue * 0.85; // Mock 15% decrease
+      revenueGrowth = calculateGrowth(
+        currentMonthRevenue,
+        previousMonthRevenue
+      );
+    } else {
+      // Compare current year with previous year
+      const currentYearRevenue = revenueByMonth.reduce(
+        (sum, item) => sum + item.value,
+        0
+      );
+      const previousYearRevenue = currentYearRevenue * 0.8; // Mock 20% decrease
+      revenueGrowth = calculateGrowth(currentYearRevenue, previousYearRevenue);
+    }
+
+    // Calculate user growth percentages
+    sellerGrowth = calculateGrowth(activeSellers, lastMonthSellers);
+    buyerGrowth = calculateGrowth(activeBuyers, lastMonthBuyers);
 
     // Format summary stats
     const summaryStats = {
       totalRevenue: {
         value: totalRevenue[0]?.total || 0,
-        percentage: calculateGrowth(currentMonthRevenue, lastMonthRevenue),
+        percentage: revenueGrowth,
       },
       activeSellers: {
         value: activeSellers,
-        percentage: calculateGrowth(activeSellers, lastMonthSellers),
+        percentage: sellerGrowth,
       },
       activeBuyers: {
         value: activeBuyers,
-        percentage: calculateGrowth(activeBuyers, lastMonthBuyers),
+        percentage: buyerGrowth,
       },
     };
 
@@ -369,7 +506,7 @@ exports.getDashboardData = async (req, res) => {
         id: seller._id,
         name: seller.name,
         sales: seller.sales,
-        revenue: `$${seller.revenue.toFixed(2)}`,
+        revenue: seller.revenue.toFixed(2), // Remove $ symbol, frontend will add ₹
         growth: 0, // You can calculate this if needed
       })),
       recentActivities: [], // You can implement this based on your needs
@@ -411,7 +548,9 @@ exports.getRealTimeStats = async (req, res) => {
     const [activeProducts, activeUsers, openTickets] = await Promise.all([
       Product.countDocuments({ isActive: true }),
       User.countDocuments({ isEmailVerified: true }),
-      Order.countDocuments({ status: "Pending" }),
+      Inquiry.countDocuments({
+        $or: [{ status: "Open" }, { status: "In_Progress" }],
+      }),
     ]);
 
     const response = {

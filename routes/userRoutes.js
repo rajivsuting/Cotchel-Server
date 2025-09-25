@@ -53,6 +53,8 @@ router.post("/request-reset", authController.requestResetLink);
 router.post("/reset-password", authController.resetPassword);
 router.get("/all", authController.getAllUsers);
 router.get("/get/:id", authController.getUserById);
+router.put("/update/:id", authController.updateUser);
+router.delete("/delete/:id", authController.deleteUser);
 
 router.get("/google-signin", authController.continueWithGoogle);
 router.post("/resend-otp", authController.resendOTP);

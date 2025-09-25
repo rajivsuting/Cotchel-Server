@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Category = require("../models/category");
 const SubCategory = require("../models/subCategory");
 const Product = require("../models/product");
@@ -104,11 +105,49 @@ exports.getCategories = async (req, res) => {
 };
 
 /**
+ * Update a Category
+ */
+exports.updateCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ message: "Category name is required" });
+    }
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ message: "Category not found" });
+    }
+
+    category.name = name;
+    await category.save();
+
+    return res
+      .status(200)
+      .json({ message: "Category updated successfully", data: category });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Category name must be unique" });
+    }
+    return res
+      .status(500)
+      .json({ message: "Failed to update category", error: error.message });
+  }
+};
+
+/**
  * Delete a Category and its SubCategories
  */
 exports.deleteCategory = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid category ID format" });
+    }
 
     const category = await Category.findById(id);
     if (!category) {
@@ -120,6 +159,7 @@ exports.deleteCategory = async (req, res) => {
       .status(200)
       .json({ message: "Category and its subcategories deleted successfully" });
   } catch (error) {
+    console.error("Error deleting category:", error);
     return res
       .status(500)
       .json({ message: "Failed to delete category", error: error.message });

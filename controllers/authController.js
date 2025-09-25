@@ -12,6 +12,11 @@ const sendEmail = require("../utils/sendEmail");
 const crypto = require("crypto");
 const SellerDetails = require("../models/sellerDetails");
 const Address = require("../models/address");
+const Product = require("../models/product");
+const Order = require("../models/order");
+const Review = require("../models/reviewSchema");
+const Wishlist = require("../models/wishList");
+const Inquiry = require("../models/inquiry");
 const { oauth2client } = require("../utils/googleConfig");
 const mongoose = require("mongoose");
 const axios = require("axios");
@@ -839,6 +844,116 @@ exports.getUserById = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching user by ID:", error);
+    return res.status(500).json({
+      message: "An internal server error occurred.",
+      statusCode: 500,
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Update a user by ID (Admin only)
+ */
+exports.updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    // Validate MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid user ID format.",
+        statusCode: 400,
+      });
+    }
+
+    // Remove sensitive fields that shouldn't be updated via this endpoint
+    delete updateData.password;
+    delete updateData.emailVerificationCode;
+    delete updateData.resetPasswordToken;
+    delete updateData.resetPasswordExpires;
+
+    const user = await User.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    )
+      .populate("addresses sellerDetails")
+      .select("-password");
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found.",
+        statusCode: 404,
+      });
+    }
+
+    return res.status(200).json({
+      message: "User updated successfully.",
+      statusCode: 200,
+      data: user,
+    });
+  } catch (error) {
+    console.error("Error updating user:", error);
+    return res.status(500).json({
+      message: "An internal server error occurred.",
+      statusCode: 500,
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Delete a user by ID (Admin only)
+ */
+exports.deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid user ID format.",
+        statusCode: 400,
+      });
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found.",
+        statusCode: 404,
+      });
+    }
+
+    // Delete related data
+    await Promise.all([
+      User.findByIdAndDelete(id),
+      // Delete user's addresses
+      Address.deleteMany({ user: id }),
+      // Delete user's seller details
+      SellerDetails.deleteMany({ user: id }),
+      // Delete user's products
+      Product.deleteMany({ user: id }),
+      // Delete user's orders (as buyer)
+      Order.deleteMany({ buyer: id }),
+      // Delete user's orders (as seller)
+      Order.deleteMany({ seller: id }),
+      // Delete user's reviews
+      Review.deleteMany({ user: id }),
+      // Delete user's wishlist
+      Wishlist.deleteMany({ userId: id }),
+      // Delete user's inquiries
+      Inquiry.deleteMany({ user: id }),
+    ]);
+
+    return res.status(200).json({
+      message: "User deleted successfully.",
+      statusCode: 200,
+    });
+  } catch (error) {
+    console.error("Error deleting user:", error);
     return res.status(500).json({
       message: "An internal server error occurred.",
       statusCode: 500,

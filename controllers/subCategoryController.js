@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const SubCategory = require("../models/subCategory");
 const Category = require("../models/category");
 const Product = require("../models/product");
@@ -74,22 +75,86 @@ exports.getSubCategoriesByCategory = async (req, res) => {
 };
 
 /**
- * Delete a SubCategory
+ * Update a SubCategory
  */
-exports.deleteSubCategory = async (req, res) => {
+exports.updateSubCategory = async (req, res) => {
   try {
     const { id } = req.params;
+    const { name, category } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ message: "SubCategory name is required" });
+    }
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid subcategory ID format" });
+    }
 
     const subCategory = await SubCategory.findById(id);
     if (!subCategory) {
       return res.status(404).json({ message: "SubCategory not found" });
     }
 
-    await subCategory.remove();
+    // If category is being changed, validate it exists
+    if (category && category !== subCategory.category.toString()) {
+      const existingCategory = await Category.findById(category);
+      if (!existingCategory) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+    }
+
+    subCategory.name = name;
+    if (category) {
+      subCategory.category = category;
+    }
+
+    await subCategory.save();
+
+    return res
+      .status(200)
+      .json({ message: "SubCategory updated successfully", data: subCategory });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "SubCategory name must be unique within the same category",
+      });
+    }
+    console.error("Error updating subcategory:", error);
+    return res
+      .status(500)
+      .json({ message: "Failed to update subcategory", error: error.message });
+  }
+};
+
+/**
+ * Delete a SubCategory
+ */
+exports.deleteSubCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid subcategory ID format" });
+    }
+
+    const subCategory = await SubCategory.findById(id);
+    if (!subCategory) {
+      return res.status(404).json({ message: "SubCategory not found" });
+    }
+
+    // Remove from category's subcategories array
+    await Category.findByIdAndUpdate(subCategory.category, {
+      $pull: { subCategories: subCategory._id },
+    });
+
+    await subCategory.deleteOne();
     return res
       .status(200)
       .json({ message: "SubCategory deleted successfully" });
   } catch (error) {
+    console.error("Error deleting subcategory:", error);
     return res
       .status(500)
       .json({ message: "Failed to delete subcategory", error: error.message });

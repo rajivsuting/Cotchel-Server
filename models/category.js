@@ -26,7 +26,7 @@ categorySchema.pre(/^find/, function (next) {
 categorySchema.methods.deleteWithSubCategories = async function () {
   const SubCategory = mongoose.model("SubCategory");
   await SubCategory.deleteMany({ category: this._id });
-  await this.remove();
+  await this.deleteOne();
 };
 
 categorySchema.post("save", function (error, doc, next) {
