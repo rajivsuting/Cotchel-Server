@@ -121,8 +121,16 @@ const razorpayWebhook = async (req, res) => {
       }
 
       order.paymentStatus = "Paid";
-      order.paymentTransactionId = data.id;
-      order.status = "Completed";
+      order.razorpayPaymentId = data.id;
+      order.paymentTransactionId = data.order_id;
+      order.status = "Confirmed";
+      order.confirmedAt = new Date();
+      order.canCancel = true;
+      order.statusHistory.push({
+        status: "Confirmed",
+        note: "Payment captured successfully",
+        timestamp: new Date(),
+      });
       await order.save();
 
       await razorpayService.processPayout(order._id);

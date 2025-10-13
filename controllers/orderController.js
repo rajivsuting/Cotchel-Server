@@ -295,7 +295,7 @@ async function createSellerOrder(
           sum + item.quantity * item.productId.lotSize * item.productId.price,
         0
       ),
-      status: "Pending",
+      status: "Payment Pending",
       paymentStatus: "Pending",
       paymentTransactionId: razorpayOrder.id,
       address: {
@@ -309,8 +309,8 @@ async function createSellerOrder(
       },
       statusHistory: [
         {
-          status: "Pending",
-          note: "Order created",
+          status: "Payment Pending",
+          note: "Order created, awaiting payment",
         },
       ],
     });
@@ -766,13 +766,21 @@ exports.verifyPayment = async (req, res) => {
 
         await transaction.save({ session });
 
-        // Update order status
+        // Update order status to Confirmed (payment received)
         order.paymentStatus = "Paid";
-        order.paymentTransactionId = payment_id;
-        order.status = "Completed";
+        order.razorpayPaymentId = payment_id;
+        order.razorpayOrderId = order_id;
+        order.razorpaySignature = signature;
+        order.status = "Confirmed";
+        order.confirmedAt = new Date();
+        order.platformFee = platformFee;
+        order.platformFeePercentage = platformFeePercentage;
+        order.sellerEarnings = sellerAmount;
+        order.canCancel = true;
+        order.canReturn = false;
         order.statusHistory.push({
-          status: "Completed",
-          note: "Payment verified successfully",
+          status: "Confirmed",
+          note: "Payment verified successfully, order confirmed",
         });
         await order.save({ session });
 
@@ -896,7 +904,7 @@ exports.createOrderFromBuyNow = async (req, res) => {
       buyer: buyer._id,
       seller: product.user._id,
       totalPrice,
-      status: "Pending",
+      status: "Payment Pending",
       paymentStatus: "Pending",
       address: {
         street: `${shippingAddress.addressLine1} ${shippingAddress.addressLine2}`,
@@ -1227,7 +1235,7 @@ exports.cancelOrder = async (req, res) => {
     const order = await Order.findOne({
       _id: id,
       buyer: userId,
-      paymentStatus: "pending", // Only allow cancellation of pending orders
+      paymentStatus: "Pending", // Only allow cancellation of pending orders
     }).session(session);
 
     if (!order) {
@@ -1238,7 +1246,10 @@ exports.cancelOrder = async (req, res) => {
     }
 
     // Check if order is in a cancellable state
-    if (order.paymentStatus !== "pending" || order.status !== "pending") {
+    if (
+      order.paymentStatus !== "Pending" ||
+      order.status !== "Payment Pending"
+    ) {
       await session.abortTransaction();
       return res.status(400).json({
         message: "Order cannot be cancelled in its current state",
@@ -1260,8 +1271,8 @@ exports.cancelOrder = async (req, res) => {
     await Order.findByIdAndUpdate(
       id,
       {
-        status: "cancelled",
-        paymentStatus: "cancelled",
+        status: "Cancelled",
+        paymentStatus: "Failed",
         cancelledAt: new Date(),
         cancellationReason: "User cancelled payment",
       },
@@ -1304,10 +1315,10 @@ exports.cancelOrder = async (req, res) => {
   }
 };
 
-// Handle payment cancellation or timeout
+// Handle payment cancellation or timeout (DO NOT cancel immediately like Flipkart)
 exports.handlePaymentCancellation = async (req, res) => {
   try {
-    const { orderId, reason = "Payment cancelled by user" } = req.body;
+    const { orderId, reason = "Payment not completed" } = req.body;
     const { _id: userId } = req.user;
 
     if (!orderId) {
@@ -1323,21 +1334,30 @@ exports.handlePaymentCancellation = async (req, res) => {
 
     if (!order) {
       return res.status(404).json({
-        message: "Order not found or cannot be cancelled",
+        message: "Order not found or already processed",
       });
     }
 
-    // Handle the cancellation
-    await handlePaymentFailure(orderId, reason);
+    // DON'T cancel immediately - keep as "Payment Pending" for retry
+    // Just add a note to status history
+    order.statusHistory.push({
+      status: "Payment Pending",
+      note: reason,
+      timestamp: new Date(),
+    });
+
+    await order.save();
 
     res.status(200).json({
-      message: "Payment cancelled successfully",
+      message: "Order is pending payment",
       orderId: orderId,
+      status: "Payment Pending",
+      note: "You can retry payment anytime. Order will be auto-cancelled after 30 minutes.",
     });
   } catch (error) {
     console.error("Error handling payment cancellation:", error);
     res.status(500).json({
-      message: "Failed to cancel payment",
+      message: "Failed to process payment cancellation",
       error: error.message,
     });
   }
@@ -1351,7 +1371,7 @@ exports.handleAbandonedPayments = async () => {
     // Find orders that are pending payment for more than 30 minutes
     const abandonedOrders = await Order.find({
       paymentStatus: "Pending",
-      status: "Pending",
+      status: "Payment Pending",
       createdAt: { $lt: thirtyMinutesAgo },
     });
 

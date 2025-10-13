@@ -47,12 +47,20 @@ exports.getDashboardStats = async (req, res) => {
     ]);
 
     const orderStatusMap = {
-      Pending: 0,
+      "Payment Pending": 0,
+      Confirmed: 0,
       Processing: 0,
+      Packed: 0,
       Shipped: 0,
+      "In Transit": 0,
+      "Out for Delivery": 0,
       Delivered: 0,
-      Cancelled: 0,
       Completed: 0,
+      "Cancellation Requested": 0,
+      Cancelled: 0,
+      "Return Requested": 0,
+      Returned: 0,
+      Refunded: 0,
     };
 
     orderStatusResult.forEach((status) => {

@@ -128,7 +128,14 @@ exports.handlePaymentWebhook = async (req, res) => {
     switch (event) {
       case "payment.captured":
         order.paymentStatus = "Paid";
-        order.status = "Processing";
+        order.status = "Confirmed";
+        order.confirmedAt = new Date();
+        order.canCancel = true;
+        order.statusHistory.push({
+          status: "Confirmed",
+          note: "Payment captured via webhook",
+          timestamp: new Date(),
+        });
         break;
       case "payment.failed":
         // Handle payment failure and restore stock
