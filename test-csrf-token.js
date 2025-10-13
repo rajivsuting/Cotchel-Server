@@ -3,7 +3,7 @@ const axios = require("axios");
 console.log("🛡️ Testing CSRF Token Functionality");
 console.log("====================================\n");
 
-const BASE_URL = "http://localhost:5000";
+const BASE_URL = "https://starfish-app-6q6ot.ondigitalocean.app";
 const API_BASE = `${BASE_URL}/api`;
 
 async function testCSRFToken() {
