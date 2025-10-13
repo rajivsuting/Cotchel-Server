@@ -123,7 +123,7 @@ exports.getAdmin = async (req, res) => {
           gender,
           createdAt,
         }) => ({
-          id: _id,
+          _id,
           fullName,
           email,
           phoneNumber,
@@ -137,6 +137,92 @@ exports.getAdmin = async (req, res) => {
     console.error("Error retrieving admin users:", error);
     return res.status(500).json({
       message: "Internal server error while retrieving admin users.",
+    });
+  }
+};
+
+// Get current admin profile
+exports.getProfile = async (req, res) => {
+  try {
+    const admin = await User.findById(req.user._id).select("-password -__v");
+
+    if (!admin) {
+      return res.status(404).json({
+        message: "Admin not found.",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Profile retrieved successfully.",
+      data: admin,
+    });
+  } catch (error) {
+    console.error("Error retrieving profile:", error);
+    return res.status(500).json({
+      message: "Internal server error while retrieving profile.",
+    });
+  }
+};
+
+// Update admin profile
+exports.updateProfile = async (req, res) => {
+  try {
+    const { fullName, phoneNumber, gender } = req.body;
+
+    const updateData = {};
+    if (fullName) updateData.fullName = fullName;
+    if (phoneNumber) updateData.phoneNumber = phoneNumber;
+    if (gender) updateData.gender = gender;
+
+    const admin = await User.findByIdAndUpdate(req.user._id, updateData, {
+      new: true,
+    }).select("-password -__v");
+
+    if (!admin) {
+      return res.status(404).json({
+        message: "Admin not found.",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Profile updated successfully.",
+      data: admin,
+    });
+  } catch (error) {
+    console.error("Error updating profile:", error);
+    return res.status(500).json({
+      message: "Internal server error while updating profile.",
+    });
+  }
+};
+
+// Delete admin
+exports.deleteAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Prevent admin from deleting themselves
+    if (req.user._id.toString() === id) {
+      return res.status(400).json({
+        message: "You cannot delete your own admin account.",
+      });
+    }
+
+    const admin = await User.findByIdAndDelete(id);
+
+    if (!admin) {
+      return res.status(404).json({
+        message: "Admin not found.",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Admin deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Error deleting admin:", error);
+    return res.status(500).json({
+      message: "Internal server error while deleting admin.",
     });
   }
 };

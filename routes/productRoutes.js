@@ -7,6 +7,11 @@ const router = express.Router();
 router.post("/", authMiddleware.verifyToken, productController.createProduct);
 
 router.get("/", authMiddleware.optionalAuth, productController.getAllProducts);
+router.get(
+  "/top-selling",
+  authMiddleware.verifyToken,
+  productController.getTopSellingProducts
+);
 router.get("/debug", productController.debugProducts);
 router.get("/get/:id", productController.getProductById);
 router.get("/search", productController.searchProduct);

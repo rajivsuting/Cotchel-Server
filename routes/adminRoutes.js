@@ -55,4 +55,31 @@ router.post(
   adminSettingsController.createAdmin
 );
 
+// Password change route
+router.put(
+  "/change-password",
+  authMiddleware.verifyToken,
+  require("../controllers/authController").changePassword
+);
+
+// Profile Routes
+router.get(
+  "/profile",
+  authMiddleware.verifyToken,
+  adminSettingsController.getProfile
+);
+
+router.put(
+  "/profile",
+  authMiddleware.verifyToken,
+  adminSettingsController.updateProfile
+);
+
+// Delete admin route
+router.delete(
+  "/:id",
+  authMiddleware.verifyToken,
+  adminSettingsController.deleteAdmin
+);
+
 module.exports = router;

@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Category = require("../models/category");
 const SubCategory = require("../models/subCategory");
 const NotificationService = require("../services/notificationService");
+const Order = require("../models/order");
 
 function generateSKU(name, model, brand, category) {
   const brandCode = brand.slice(0, 3).toUpperCase();
@@ -1074,3 +1075,328 @@ function getMatchScore(text, query, patterns) {
 
   return score;
 }
+
+exports.getTopSellingProducts = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = "sold",
+      order = "desc",
+    } = req.query;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Build aggregation pipeline
+    const pipeline = [
+      // Lookup orders to get sales data
+      {
+        $lookup: {
+          from: "orders",
+          let: { productId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $ne: ["$status", "Cancelled"] },
+                    { $eq: ["$paymentStatus", "Paid"] },
+                    {
+                      $in: [
+                        "$$productId",
+                        {
+                          $map: {
+                            input: "$products",
+                            as: "product",
+                            in: "$$product.product",
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "orders",
+        },
+      },
+      // Add sales calculations
+      {
+        $addFields: {
+          sold: {
+            $sum: {
+              $map: {
+                input: "$orders",
+                as: "order",
+                in: {
+                  $sum: {
+                    $map: {
+                      input: "$$order.products",
+                      as: "product",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$product.product", "$_id"] },
+                          "$$product.quantity",
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          revenue: {
+            $sum: {
+              $map: {
+                input: "$orders",
+                as: "order",
+                in: {
+                  $sum: {
+                    $map: {
+                      input: "$$order.products",
+                      as: "product",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$product.product", "$_id"] },
+                          {
+                            $multiply: [
+                              "$$product.quantity",
+                              "$$product.price",
+                            ],
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          orders: { $size: "$orders" },
+          lastSold: {
+            $max: {
+              $map: {
+                input: "$orders",
+                as: "order",
+                in: "$$order.createdAt",
+              },
+            },
+          },
+        },
+      },
+      // Filter out products with no sales if needed
+      {
+        $match: {
+          sold: { $gt: 0 },
+        },
+      },
+    ];
+
+    // Add search filter if provided
+    if (search) {
+      pipeline.push({
+        $match: {
+          $or: [
+            { title: { $regex: search, $options: "i" } },
+            { brand: { $regex: search, $options: "i" } },
+            { model: { $regex: search, $options: "i" } },
+          ],
+        },
+      });
+    }
+
+    // Add sorting
+    const sortField =
+      sortBy === "sold"
+        ? "sold"
+        : sortBy === "revenue"
+        ? "revenue"
+        : sortBy === "price"
+        ? "price"
+        : "sold";
+    const sortOrder = order === "asc" ? 1 : -1;
+
+    pipeline.push({ $sort: { [sortField]: sortOrder } });
+
+    // Add pagination
+    pipeline.push({ $skip: skip });
+    pipeline.push({ $limit: parseInt(limit) });
+
+    // Lookup category and user data
+    pipeline.push(
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "user",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      {
+        $addFields: {
+          category: { $arrayElemAt: ["$category", 0] },
+          user: { $arrayElemAt: ["$user", 0] },
+        },
+      }
+    );
+
+    // Execute aggregation
+    const products = await Product.aggregate(pipeline);
+
+    // Get total count for pagination
+    const countPipeline = [...pipeline];
+    countPipeline.splice(-5, 5); // Remove pagination and lookup stages
+    countPipeline.push({ $count: "total" });
+
+    const totalResult = await Product.aggregate(countPipeline);
+    const totalProducts = totalResult[0]?.total || 0;
+
+    // Calculate stats
+    const statsPipeline = [
+      {
+        $lookup: {
+          from: "orders",
+          let: { productId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $ne: ["$status", "Cancelled"] },
+                    { $eq: ["$paymentStatus", "Paid"] },
+                    {
+                      $in: [
+                        "$$productId",
+                        {
+                          $map: {
+                            input: "$products",
+                            as: "product",
+                            in: "$$product.product",
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "orders",
+        },
+      },
+      {
+        $addFields: {
+          sold: {
+            $sum: {
+              $map: {
+                input: "$orders",
+                as: "order",
+                in: {
+                  $sum: {
+                    $map: {
+                      input: "$$order.products",
+                      as: "product",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$product.product", "$_id"] },
+                          "$$product.quantity",
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          revenue: {
+            $sum: {
+              $map: {
+                input: "$orders",
+                as: "order",
+                in: {
+                  $sum: {
+                    $map: {
+                      input: "$$order.products",
+                      as: "product",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$product.product", "$_id"] },
+                          {
+                            $multiply: [
+                              "$$product.quantity",
+                              "$$product.price",
+                            ],
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        $match: {
+          sold: { $gt: 0 },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$revenue" },
+          totalUnitsSold: { $sum: "$sold" },
+          averageOrderValue: { $avg: "$revenue" },
+          topPerformer: {
+            $first: {
+              $cond: [
+                { $eq: ["$sold", { $max: "$sold" }] },
+                { name: "$title", sold: "$sold", revenue: "$revenue" },
+                null,
+              ],
+            },
+          },
+        },
+      },
+    ];
+
+    const statsResult = await Product.aggregate(statsPipeline);
+    const stats = statsResult[0] || {
+      totalRevenue: 0,
+      totalUnitsSold: 0,
+      averageOrderValue: 0,
+      topPerformer: null,
+    };
+
+    res.status(200).json({
+      success: true,
+      products,
+      totalProducts,
+      totalPages: Math.ceil(totalProducts / parseInt(limit)),
+      currentPage: parseInt(page),
+      stats,
+    });
+  } catch (error) {
+    console.error("Error fetching top selling products:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch top selling products",
+      error: error.message,
+    });
+  }
+};
