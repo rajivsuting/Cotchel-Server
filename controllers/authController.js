@@ -9,6 +9,10 @@ const geoip = require("geoip-lite");
 const parser = require("user-agent-parser");
 const LoginDetails = require("../models/LoginDetails");
 const sendEmail = require("../utils/sendEmail");
+const {
+  getPasswordResetTemplate,
+  getEmailVerificationTemplate,
+} = require("../utils/emailTemplates");
 const crypto = require("crypto");
 const SellerDetails = require("../models/sellerDetails");
 const Address = require("../models/address");
@@ -52,17 +56,30 @@ exports.register = async (req, res) => {
     });
 
     try {
-      await sendEmail(email, "Email Verification Code", {
-        text: `Your verification code is: ${verificationCode}`,
-        html: `<p>Your verification code is: <strong>${verificationCode}</strong></p>`,
-      });
+      // Prepare email data
+      const emailData = {
+        userName: "New User", // We don't have fullName yet during registration
+        verificationCode: verificationCode,
+        expiryTime: "10 minutes",
+      };
 
+      // Generate professional email templates
+      const { html, text } = getEmailVerificationTemplate(emailData);
+
+      // Send professional email verification
+      await sendEmail(
+        email,
+        "Verify Your Cotchel Account - Complete Your Registration",
+        { html, text }
+      );
+
+      console.log(`✅ Email verification sent successfully to: ${email}`);
       res.status(200).json({
         message: "Verification code sent to email.",
         userId: newUser._id,
       });
     } catch (emailError) {
-      console.error("Email sending failed:", emailError);
+      console.error("❌ Email sending failed:", emailError);
 
       // Still allow registration to succeed, but inform user
       res.status(200).json({
@@ -96,11 +113,21 @@ exports.resendOTP = async (req, res) => {
     user.emailVerificationCode = newVerificationCode;
     await user.save();
 
-    await sendEmail(
-      email,
-      "Resend Verification Code",
-      `Your new verification code is: ${newVerificationCode}`
-    );
+    // Prepare email data
+    const emailData = {
+      userName: user.fullName || "Valued Customer",
+      verificationCode: newVerificationCode,
+      expiryTime: "10 minutes",
+    };
+
+    // Generate professional email templates
+    const { html, text } = getEmailVerificationTemplate(emailData);
+
+    // Send professional email verification
+    await sendEmail(email, "New Verification Code - Cotchel Account", {
+      html,
+      text,
+    });
 
     res.status(200).json({ message: "Verification code resent to email." });
   } catch (error) {
@@ -110,26 +137,47 @@ exports.resendOTP = async (req, res) => {
 };
 
 exports.requestResetLink = async (req, res) => {
-  const { email } = req.body;
-  const user = await User.findOne({ email });
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
 
-  if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-  const resetToken = crypto.randomBytes(32).toString("hex");
-  user.resetToken = resetToken;
-  user.tokenExpiry = Date.now() + 3600000; // Token expires in 1 hour
-  await user.save();
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    user.resetToken = resetToken;
+    user.tokenExpiry = Date.now() + 3600000; // Token expires in 1 hour
+    await user.save();
 
-  const url = isProduction ? process.env.PRO_URL : process.env.DEV_URL;
+    const url = isProduction ? process.env.PRO_URL : process.env.DEV_URL;
+    const resetLink = `${url}/reset-password?token=${resetToken}`;
 
-  // Send email
-  const resetLink = `${url}/reset-password?token=${resetToken}`;
-  await sendEmail(email, "Password Reset", {
-    text: `Click on the following link to reset your password: ${resetLink}`, // Plain text fallback
-    html: `<p>Click <a href="${resetLink}">here</a> to reset your password.</p>`, // HTML version
-  });
+    // Prepare email data
+    const emailData = {
+      userName: user.fullName || "Valued Customer",
+      resetLink: resetLink,
+      expiryTime: "1 hour",
+    };
 
-  res.json({ message: "Password reset link sent!" });
+    // Generate professional email templates
+    const { html, text } = getPasswordResetTemplate(emailData);
+
+    // Send professional password reset email
+    await sendEmail(
+      email,
+      "Reset Your Cotchel Password - Secure Your Account",
+      { html, text }
+    );
+
+    console.log(`✅ Password reset email sent successfully to: ${email}`);
+    res.json({ message: "Password reset link sent!" });
+  } catch (error) {
+    console.error("❌ Error sending password reset email:", error);
+    res.status(500).json({
+      message: "Failed to send password reset email. Please try again later.",
+    });
+  }
 };
 
 exports.resetPassword = async (req, res) => {
@@ -1272,6 +1320,54 @@ exports.changePassword = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "An error occurred while changing password.",
+      error: error.message,
+    });
+  }
+};
+
+// Test endpoint for password reset email (development only)
+exports.testPasswordResetEmail = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    console.log("=== Testing Password Reset Email ===");
+    console.log("Email:", email);
+
+    // Create a test reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const url = isProduction ? process.env.PRO_URL : process.env.DEV_URL;
+    const resetLink = `${url}/reset-password?token=${resetToken}`;
+
+    // Prepare email data
+    const emailData = {
+      userName: "Test User",
+      resetLink: resetLink,
+      expiryTime: "1 hour",
+    };
+
+    // Generate professional email templates
+    const { html, text } = getPasswordResetTemplate(emailData);
+
+    // Send test password reset email
+    await sendEmail(
+      email,
+      "Test - Reset Your Cotchel Password - Secure Your Account",
+      { html, text }
+    );
+
+    res.status(200).json({
+      message: "Password reset email test completed",
+      email: email,
+      resetLink: resetLink,
+    });
+  } catch (error) {
+    console.error("Error in test password reset email:", error);
+    res.status(500).json({
+      message: "Error testing password reset email",
       error: error.message,
     });
   }

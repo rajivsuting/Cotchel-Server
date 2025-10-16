@@ -84,4 +84,12 @@ router.patch(
   authController.updateSellerDetails
 );
 
+// Test endpoints (development only)
+if (process.env.NODE_ENV === "development") {
+  router.post(
+    "/test-password-reset-email",
+    authController.testPasswordResetEmail
+  );
+}
+
 module.exports = router;

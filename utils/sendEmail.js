@@ -15,16 +15,53 @@ const sendEmail = async (to, subject, { text, html }) => {
     );
   }
 
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(to)) {
+    throw new Error(`Invalid email address: ${to}`);
+  }
+
+  // Validate subject line (should not be empty and not too long)
+  if (!subject || subject.trim().length === 0) {
+    throw new Error("Email subject cannot be empty");
+  }
+  if (subject.length > 200) {
+    throw new Error("Email subject is too long (max 200 characters)");
+  }
+
   try {
     console.log(`Attempting to send email to: ${to}`);
     console.log(`From: ${process.env.SENDGRID_FROM_EMAIL}`);
+    console.log(`Subject: ${subject}`);
 
     await sgMail.send({
       to,
-      from: process.env.SENDGRID_FROM_EMAIL,
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL,
+        name: "Cotchel - Electronics Marketplace",
+      },
+      replyTo: {
+        email: "support@cotchel.com",
+        name: "Cotchel Support",
+      },
       subject,
       text,
       html,
+      // Add headers to improve deliverability
+      headers: {
+        "X-Mailer": "Cotchel-Email-Service",
+        "X-Priority": "3",
+        "X-MSMail-Priority": "Normal",
+        Importance: "Normal",
+        "X-Cotchel-Order": "true",
+      },
+      // Add categories for better email management
+      categories: ["order-confirmation", "transactional"],
+      // Add custom args for tracking
+      customArgs: {
+        source: "order-system",
+        type: "transactional",
+      },
     });
 
     console.log("Email sent successfully");

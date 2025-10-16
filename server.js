@@ -156,6 +156,7 @@ app.use("/api/cart", cartRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/wishlist", wishListRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/invoices", require("./routes/invoiceRoutes"));
 app.use("/api/address", addressRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/dashboard", dashboardRoutes);

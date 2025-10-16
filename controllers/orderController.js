@@ -14,6 +14,7 @@ const { authenticateShiprocket } = require("../services/shiprocketService");
 const Transaction = require("../models/transaction");
 const PlatformSettings = require("../models/platformSettings");
 const NotificationService = require("../services/notificationService");
+const OrderEmailService = require("../services/orderEmailService");
 
 const SHIPROCKET_API_URL = "https://apiv2.shiprocket.in/v1/external";
 
@@ -221,6 +222,20 @@ async function updateOrderStatus(orderId, status, note) {
     orderId: order._id,
     message: `Order #${order._id} status updated to ${status}`,
   });
+
+  // Send email notification to buyer for status updates
+  try {
+    console.log(
+      `📧 Sending status update email for order ${orderId} - Status: ${status}`
+    );
+    await OrderEmailService.sendOrderStatusUpdateEmail(orderId, status, note);
+  } catch (emailError) {
+    console.error(
+      `❌ Error sending status update email for order ${orderId}:`,
+      emailError
+    );
+    // Don't fail the status update if email fails
+  }
 
   return order;
 }
@@ -800,6 +815,36 @@ exports.verifyPayment = async (req, res) => {
     }
 
     await session.commitTransaction();
+
+    // Send order confirmation emails to buyers
+    console.log("📧 Sending order confirmation emails...");
+    try {
+      const emailResults =
+        await OrderEmailService.sendBulkOrderConfirmationEmails(
+          orders.map((order) => order._id),
+          {
+            estimatedDelivery: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+          }
+        );
+
+      const successCount = emailResults.filter((r) => r.success).length;
+      console.log(
+        `✅ Order confirmation emails sent: ${successCount}/${orders.length} successful`
+      );
+
+      // Log any email failures (but don't fail the payment verification)
+      emailResults
+        .filter((r) => !r.success)
+        .forEach((result) => {
+          console.warn(
+            `⚠️ Email failed for order ${result.orderId}: ${result.error}`
+          );
+        });
+    } catch (emailError) {
+      console.error("❌ Error sending order confirmation emails:", emailError);
+      // Don't fail the payment verification if emails fail
+    }
+
     res.status(200).json({ message: "Payment verified successfully" });
   } catch (error) {
     await session.abortTransaction();
@@ -983,6 +1028,9 @@ exports.createOrderFromBuyNow = async (req, res) => {
     });
 
     await session.commitTransaction();
+
+    // Note: Order confirmation email will be sent after payment verification
+    // This happens in the verifyPayment function
   } catch (error) {
     await session.abortTransaction();
     console.error("=== Buy Now Order Creation Process Failed ===");
@@ -1430,6 +1478,36 @@ exports.testRestoreStock = async (req, res) => {
     console.error("Error in test restore stock:", error);
     res.status(500).json({
       message: "Error testing stock restoration",
+      error: error.message,
+    });
+  }
+};
+
+// Test endpoint for order confirmation email (development only)
+exports.testOrderConfirmationEmail = async (req, res) => {
+  try {
+    const { orderId } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "Order ID is required" });
+    }
+
+    console.log("=== Testing Order Confirmation Email ===");
+    console.log("Order ID:", orderId);
+
+    // Test sending order confirmation email
+    const result = await OrderEmailService.sendOrderConfirmationEmail(orderId, {
+      estimatedDelivery: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+    });
+
+    res.status(200).json({
+      message: "Order confirmation email test completed",
+      result: result,
+    });
+  } catch (error) {
+    console.error("Error in test order confirmation email:", error);
+    res.status(500).json({
+      message: "Error testing order confirmation email",
       error: error.message,
     });
   }

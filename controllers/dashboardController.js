@@ -245,6 +245,209 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
+// Get categories with server-side filtering, sorting, and pagination
+exports.getCategories = async (req, res) => {
+  try {
+    const {
+      search = "",
+      sortBy = "totalSales",
+      sortOrder = "desc",
+      page = 1,
+      limit = 10,
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build match conditions
+    const matchConditions = {
+      status: { $ne: "Cancelled" },
+      paymentStatus: "Paid",
+    };
+
+    // Build aggregation pipeline
+    const pipeline = [
+      {
+        $match: matchConditions,
+      },
+      {
+        $unwind: "$products",
+      },
+      {
+        $lookup: {
+          from: "products",
+          localField: "products.product",
+          foreignField: "_id",
+          as: "productDetails",
+        },
+      },
+      {
+        $unwind: "$productDetails",
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "productDetails.category",
+          foreignField: "_id",
+          as: "categoryDetails",
+        },
+      },
+      {
+        $unwind: "$categoryDetails",
+      },
+      {
+        $group: {
+          _id: {
+            id: "$productDetails.category",
+            name: "$categoryDetails.name",
+          },
+          totalSales: {
+            $sum: "$products.totalPrice",
+          },
+          orderCount: {
+            $addToSet: "$_id",
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          totalSales: 1,
+          orderCount: { $size: "$orderCount" },
+        },
+      },
+    ];
+
+    // Add search filter if provided
+    if (search) {
+      pipeline.push({
+        $match: {
+          "_id.name": { $regex: search, $options: "i" },
+        },
+      });
+    }
+
+    // Add sorting
+    const sortField =
+      sortBy === "totalSales"
+        ? "totalSales"
+        : sortBy === "orderCount"
+        ? "orderCount"
+        : "_id.name";
+    const sortDirection = sortOrder === "asc" ? 1 : -1;
+
+    pipeline.push({
+      $sort: { [sortField]: sortDirection },
+    });
+
+    // Get total count for pagination
+    const countPipeline = [...pipeline, { $count: "total" }];
+    const countResult = await Order.aggregate(countPipeline);
+    const total = countResult[0]?.total || 0;
+
+    // Add pagination
+    pipeline.push({ $skip: skip }, { $limit: limitNum });
+
+    // Execute aggregation
+    const categories = await Order.aggregate(pipeline);
+
+    // Calculate total sales across all categories for percentage calculation
+    const totalSalesPipeline = [
+      {
+        $match: matchConditions,
+      },
+      {
+        $unwind: "$products",
+      },
+      {
+        $lookup: {
+          from: "products",
+          localField: "products.product",
+          foreignField: "_id",
+          as: "productDetails",
+        },
+      },
+      {
+        $unwind: "$productDetails",
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "productDetails.category",
+          foreignField: "_id",
+          as: "categoryDetails",
+        },
+      },
+      {
+        $unwind: "$categoryDetails",
+      },
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: "$products.totalPrice" },
+        },
+      },
+    ];
+
+    if (search) {
+      totalSalesPipeline.push({
+        $match: {
+          "categoryDetails.name": { $regex: search, $options: "i" },
+        },
+      });
+    }
+
+    const totalSalesResult = await Order.aggregate(totalSalesPipeline);
+    const totalSales = totalSalesResult[0]?.totalSales || 0;
+
+    // Format response
+    const formattedCategories = categories.map((category) => {
+      const salesPercentage =
+        totalSales > 0 ? (category.totalSales / totalSales) * 100 : 0;
+
+      return {
+        id: category._id.id,
+        name: category._id.name,
+        totalSales: category.totalSales,
+        orderCount: category.orderCount,
+        salesPercentage: Math.round(salesPercentage * 100) / 100,
+        avgOrderValue:
+          category.orderCount > 0
+            ? Math.round(category.totalSales / category.orderCount)
+            : 0,
+      };
+    });
+
+    const totalPages = Math.ceil(total / limitNum);
+
+    res.json({
+      success: true,
+      data: formattedCategories,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalItems: total,
+        itemsPerPage: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+      filters: {
+        search,
+        sortBy,
+        sortOrder,
+      },
+    });
+  } catch (error) {
+    console.error("Categories data error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching categories data",
+      error: error.message,
+    });
+  }
+};
+
 // Helper function to get status color
 function getStatusColor(status) {
   const colors = {

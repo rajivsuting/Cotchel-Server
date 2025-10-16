@@ -57,9 +57,13 @@ router.post(
   orderController.handlePaymentCancellation
 );
 
-// Test endpoint for stock restoration (development only)
+// Test endpoints (development only)
 if (process.env.NODE_ENV === "development") {
   router.post("/test-restore-stock", orderController.testRestoreStock);
+  router.post(
+    "/test-order-confirmation-email",
+    orderController.testOrderConfirmationEmail
+  );
 }
 
 // ============ PAYMENT RETRY ROUTES (Like Flipkart) ============
