@@ -4,7 +4,7 @@ const analyticsController = require("../controllers/analyticsController");
 const { verifyToken, restrictTo } = require("../middleware/authMiddleware");
 
 // All routes should be protected and only accessible by admin
-router.use(verifyToken, restrictTo("Admin"));
+router.use(verifyToken);
 
 // Get combined dashboard data
 router.get("/dashboard", analyticsController.getDashboardData);

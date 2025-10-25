@@ -303,7 +303,8 @@ exports.updateDetails = async (req, res) => {
   }
 };
 
-exports.loginUser = async (req, res) => {
+// Client login function
+exports.loginClient = async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -316,6 +317,16 @@ exports.loginUser = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    // Check if user account is deactivated
+    if (!user.active) {
+      return res.status(403).json({
+        error: "Account deactivated",
+        message:
+          "Your account has been deactivated by an administrator. Please contact support for assistance.",
+        code: "ACCOUNT_DEACTIVATED",
+      });
     }
 
     if (!user.password) {
@@ -350,14 +361,14 @@ exports.loginUser = async (req, res) => {
 
     const isProduction = process.env.NODE_ENV === "production";
 
-    res.cookie("accessToken", accessToken, {
+    res.cookie("client_accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
       maxAge: 3600000 * 24 * 7,
     });
 
-    res.cookie("refreshToken", refreshToken, {
+    res.cookie("client_refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
@@ -370,10 +381,103 @@ exports.loginUser = async (req, res) => {
       token: accessToken,
     });
   } catch (error) {
-    console.error("Login Error:", error);
+    console.error("Client Login Error:", error);
     res.status(500).json({ error: "Internal server error." });
   }
 };
+
+// Admin login function
+exports.loginAdmin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ error: "Email and password are required." });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    // Check if user account is deactivated
+    if (!user.active) {
+      return res.status(403).json({
+        error: "Account deactivated",
+        message:
+          "Your admin account has been deactivated. Please contact the system administrator for assistance.",
+        code: "ADMIN_ACCOUNT_DEACTIVATED",
+      });
+    }
+
+    // Check if user has admin role
+    if (user.role !== "Admin") {
+      return res
+        .status(403)
+        .json({ error: "Access denied. Admin role required." });
+    }
+
+    if (!user.password) {
+      return res
+        .status(400)
+        .json({ error: "Password is not set for this user." });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    const ipAddress =
+      req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+    const userAgent = req.headers["user-agent"];
+    const deviceInfo = parser(userAgent);
+    const location = geoip.lookup(ipAddress) || {};
+
+    await LoginDetails.create({
+      user: user._id,
+      ip: ipAddress,
+      device: deviceInfo.browser?.name || "Unknown Device",
+      location: {
+        city: location.city || "Unknown City",
+        region: location.region || "Unknown Region",
+        country: location.country || "Unknown Country",
+      },
+    });
+
+    const { accessToken, refreshToken } = createTokens(user);
+
+    const isProduction = process.env.NODE_ENV === "production";
+
+    res.cookie("admin_accessToken", accessToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "None" : "Lax",
+      maxAge: 3600000 * 24 * 7,
+    });
+
+    res.cookie("admin_refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "None" : "Lax",
+      maxAge: 3600000 * 24 * 7,
+    });
+
+    res.status(200).json({
+      message: "Admin logged in successfully.",
+      user: user,
+      token: accessToken,
+    });
+  } catch (error) {
+    console.error("Admin Login Error:", error);
+    res.status(500).json({ error: "Internal server error." });
+  }
+};
+
+// Keep original loginUser for backward compatibility (will be removed later)
+exports.loginUser = exports.loginClient;
 
 exports.addSellerDetails = async (req, res) => {
   const {
@@ -504,7 +608,8 @@ exports.addSellerDetails = async (req, res) => {
   }
 };
 
-exports.getUserProfile = async (req, res) => {
+// Client get profile function
+exports.getClientProfile = async (req, res) => {
   const { _id } = req.user;
 
   try {
@@ -541,49 +646,160 @@ exports.getUserProfile = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "User profile retrieved successfully.",
+      message: "Client profile retrieved successfully.",
       data: userProfile,
     });
   } catch (error) {
     console.error(error);
     res
       .status(500)
-      .json({ success: false, message: "Error retrieving user profile." });
+      .json({ success: false, message: "Error retrieving client profile." });
   }
 };
 
-exports.refreshToken = (req, res) => {
-  const { refreshToken } = req.cookies;
-  if (!refreshToken) {
-    return res.status(403).json({ error: "Refresh token missing" });
+// Admin get profile function
+exports.getAdminProfile = async (req, res) => {
+  const { _id } = req.user;
+
+  try {
+    const user = await User.findById(_id)
+      .populate({
+        path: "addresses",
+        select:
+          "name phone addressLine1 addressLine2 city state postalCode country isDefault",
+      })
+      .populate({
+        path: "sellerDetails",
+        select:
+          "businessName gstin pan bankName accountName accountNumber ifscCode branch addressLine1 addressLine2 city state postalCode country",
+      });
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Admin user not found." });
+    }
+
+    // Additional check for admin role
+    if (user.role !== "Admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Admin role required.",
+      });
+    }
+
+    const userProfile = {
+      email: user.email,
+      role: user.role,
+      fullName: user.fullName || "",
+      phoneNumber: user.phoneNumber || "",
+      dateOfBirth: user.dateOfBirth || "",
+      gender: user.gender || "",
+      isEmailVerified: user.isEmailVerified,
+      addresses: user.addresses || [],
+      sellerDetails: user.sellerDetails || null,
+      isVerifiedSeller: user.isVerifiedSeller || false,
+    };
+
+    res.status(200).json({
+      success: true,
+      message: "Admin profile retrieved successfully.",
+      data: userProfile,
+    });
+  } catch (error) {
+    console.error(error);
+    res
+      .status(500)
+      .json({ success: false, message: "Error retrieving admin profile." });
+  }
+};
+
+// Keep original getUserProfile for backward compatibility (will be removed later)
+exports.getUserProfile = exports.getClientProfile;
+
+// Client refresh token function
+exports.refreshClientToken = (req, res) => {
+  const { client_refreshToken } = req.cookies;
+  if (!client_refreshToken) {
+    return res.status(403).json({ error: "Client refresh token missing" });
   }
 
-  jwt.verify(refreshToken, process.env.REFRESH_SECRET, (err, user) => {
+  jwt.verify(client_refreshToken, process.env.REFRESH_SECRET, (err, user) => {
     if (err) {
-      res.clearCookie("accessToken");
-      res.clearCookie("refreshToken");
+      res.clearCookie("client_accessToken");
+      res.clearCookie("client_refreshToken");
       return res.status(403).json({
-        error: "Invalid or expired refresh token, please log in again",
+        error: "Invalid or expired client refresh token, please log in again",
       });
     }
 
     const { accessToken, refreshToken: newRefreshToken } = createTokens(user);
-    res.cookie("accessToken", accessToken, {
+    const isProduction = process.env.NODE_ENV === "production";
+
+    res.cookie("client_accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
       maxAge: 3600000 * 24 * 7,
     });
 
-    res.cookie("refreshToken", refreshToken, {
+    res.cookie("client_refreshToken", newRefreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
       maxAge: 3600000 * 24 * 7,
     });
-    res.status(200).json({ message: "Token refreshed" });
+    res.status(200).json({ message: "Client token refreshed" });
   });
 };
+
+// Admin refresh token function
+exports.refreshAdminToken = (req, res) => {
+  const { admin_refreshToken } = req.cookies;
+  if (!admin_refreshToken) {
+    return res.status(403).json({ error: "Admin refresh token missing" });
+  }
+
+  jwt.verify(admin_refreshToken, process.env.REFRESH_SECRET, (err, user) => {
+    if (err) {
+      res.clearCookie("admin_accessToken");
+      res.clearCookie("admin_refreshToken");
+      return res.status(403).json({
+        error: "Invalid or expired admin refresh token, please log in again",
+      });
+    }
+
+    // Additional check for admin role
+    if (user.role !== "Admin") {
+      res.clearCookie("admin_accessToken");
+      res.clearCookie("admin_refreshToken");
+      return res.status(403).json({
+        error: "Access denied. Admin role required.",
+      });
+    }
+
+    const { accessToken, refreshToken: newRefreshToken } = createTokens(user);
+    const isProduction = process.env.NODE_ENV === "production";
+
+    res.cookie("admin_accessToken", accessToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "None" : "Lax",
+      maxAge: 3600000 * 24 * 7,
+    });
+
+    res.cookie("admin_refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "None" : "Lax",
+      maxAge: 3600000 * 24 * 7,
+    });
+    res.status(200).json({ message: "Admin token refreshed" });
+  });
+};
+
+// Keep original refreshToken for backward compatibility (will be removed later)
+exports.refreshToken = exports.refreshClientToken;
 
 exports.editUser = async (req, res) => {
   try {
@@ -908,6 +1124,14 @@ exports.updateUser = async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
 
+    // Check if user is admin
+    if (!req.user || req.user.role !== "Admin") {
+      return res.status(403).json({
+        message: "Access denied. Admin role required.",
+        statusCode: 403,
+      });
+    }
+
     // Validate MongoDB ObjectId
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -921,6 +1145,17 @@ exports.updateUser = async (req, res) => {
     delete updateData.emailVerificationCode;
     delete updateData.resetPasswordToken;
     delete updateData.resetPasswordExpires;
+
+    // Validate active field if provided
+    if (
+      updateData.hasOwnProperty("active") &&
+      typeof updateData.active !== "boolean"
+    ) {
+      return res.status(400).json({
+        message: "active must be a boolean value.",
+        statusCode: 400,
+      });
+    }
 
     const user = await User.findByIdAndUpdate(
       id,
@@ -936,6 +1171,13 @@ exports.updateUser = async (req, res) => {
         statusCode: 404,
       });
     }
+
+    // Log admin action
+    console.log(`Admin ${req.user._id} updated user ${id}:`, {
+      updatedFields: Object.keys(updateData),
+      active: updateData.active,
+      timestamp: new Date().toISOString(),
+    });
 
     return res.status(200).json({
       message: "User updated successfully.",

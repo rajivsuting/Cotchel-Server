@@ -1,25 +1,115 @@
 const jwt = require("jsonwebtoken");
 
-exports.verifyToken = (req, res, next) => {
-  const accessToken = req.cookies?.accessToken;
+// Client authentication middleware
+exports.verifyClientToken = async (req, res, next) => {
+  const accessToken = req.cookies?.client_accessToken;
 
   if (!accessToken) {
-    return res.status(401).json({ error: "Access token missing" });
+    return res.status(401).json({ error: "Client access token missing" });
   }
 
-  jwt.verify(accessToken, process.env.JWT_SECRET, (err, user) => {
+  jwt.verify(accessToken, process.env.JWT_SECRET, async (err, user) => {
     if (err) {
       if (err.name === "TokenExpiredError") {
-        return res.status(401).json({ error: "Token expired", reAuth: true });
+        return res
+          .status(401)
+          .json({ error: "Client token expired", reAuth: true });
       }
 
-      return res.status(401).json({ error: "Invalid token" });
+      return res.status(401).json({ error: "Invalid client token" });
     }
 
-    req.user = user;
-    next();
+    // Check if user account is still active
+    try {
+      const User = require("../models/User");
+      const currentUser = await User.findById(user._id).select("active");
+
+      if (!currentUser) {
+        return res.status(401).json({
+          error: "Account not found",
+          message: "Your account has been deleted. Please contact support.",
+          code: "ACCOUNT_DELETED",
+        });
+      }
+
+      if (!currentUser.active) {
+        return res.status(403).json({
+          error: "Account deactivated",
+          message:
+            "Your account has been deactivated by an administrator. Please contact support for assistance.",
+          code: "ACCOUNT_DEACTIVATED",
+        });
+      }
+
+      req.user = user;
+      next();
+    } catch (error) {
+      console.error("Error checking user status:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
   });
 };
+
+// Admin authentication middleware
+exports.verifyAdminToken = async (req, res, next) => {
+  const accessToken = req.cookies?.admin_accessToken;
+
+  if (!accessToken) {
+    return res.status(401).json({ error: "Admin access token missing" });
+  }
+
+  jwt.verify(accessToken, process.env.JWT_SECRET, async (err, user) => {
+    if (err) {
+      if (err.name === "TokenExpiredError") {
+        return res
+          .status(401)
+          .json({ error: "Admin token expired", reAuth: true });
+      }
+
+      return res.status(401).json({ error: "Invalid admin token" });
+    }
+
+    // Check if user account is still active and exists
+    try {
+      const User = require("../models/User");
+      const currentUser = await User.findById(user._id).select("active role");
+
+      if (!currentUser) {
+        return res.status(401).json({
+          error: "Account not found",
+          message:
+            "Your admin account has been deleted. Please contact the system administrator.",
+          code: "ADMIN_ACCOUNT_DELETED",
+        });
+      }
+
+      if (!currentUser.active) {
+        return res.status(403).json({
+          error: "Account deactivated",
+          message:
+            "Your admin account has been deactivated. Please contact the system administrator for assistance.",
+          code: "ADMIN_ACCOUNT_DEACTIVATED",
+        });
+      }
+
+      // Additional check for admin role
+      if (currentUser.role !== "Admin") {
+        return res
+          .status(403)
+          .json({ error: "Access denied. Admin role required." });
+      }
+
+      req.user = user;
+      next();
+    } catch (error) {
+      console.error("Error checking admin status:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+};
+
+// Keep original verifyToken for backward compatibility (will be removed later)
+exports.verifyToken = exports.verifyClientToken;
 
 exports.restrictTo =
   (...roles) =>

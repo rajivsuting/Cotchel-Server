@@ -695,6 +695,20 @@ exports.editProduct = async (req, res) => {
       productData.compareAtPrice = Number(productData.compareAtPrice);
     if (productData.price) productData.price = Number(productData.price);
 
+    // Convert numeric fields to numbers if they exist
+    if (productData.quantityAvailable !== undefined)
+      productData.quantityAvailable = Number(productData.quantityAvailable);
+    if (productData.lotSize !== undefined)
+      productData.lotSize = Number(productData.lotSize);
+    if (productData.length !== undefined)
+      productData.length = Number(productData.length);
+    if (productData.breadth !== undefined)
+      productData.breadth = Number(productData.breadth);
+    if (productData.height !== undefined)
+      productData.height = Number(productData.height);
+    if (productData.weight !== undefined)
+      productData.weight = Number(productData.weight);
+
     console.log(
       "CompareAtPrice:",
       productData.compareAtPrice,
@@ -722,6 +736,16 @@ exports.editProduct = async (req, res) => {
       if (existingProduct) {
         return res.status(400).json({ message: "SKU already exists." });
       }
+    }
+
+    // Validate isActive field if provided
+    if (
+      productData.hasOwnProperty("isActive") &&
+      typeof productData.isActive !== "boolean"
+    ) {
+      return res.status(400).json({
+        message: "isActive must be a boolean value.",
+      });
     }
 
     // Validate image and highlights limits
@@ -762,6 +786,18 @@ exports.editProduct = async (req, res) => {
     ) {
       // Check stock status and send notifications if needed
       await NotificationService.checkStockStatus(updatedProduct);
+    }
+
+    // Log isActive status changes
+    if (
+      productData.hasOwnProperty("isActive") &&
+      productData.isActive !== currentProduct.isActive
+    ) {
+      console.log(`Product ${productId} isActive status changed:`, {
+        from: currentProduct.isActive,
+        to: productData.isActive,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     res.status(200).json({
