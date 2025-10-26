@@ -74,6 +74,20 @@ const productSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Seller deletion tracking
+    sellerDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     reviews: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -136,7 +150,7 @@ const productSchema = new mongoose.Schema(
           validator: function (value) {
             if (!value) return true; // Allow empty values
             // Allow URLs (for uploaded files) and file paths
-            if (value.startsWith('http') || value.startsWith('/')) {
+            if (value.startsWith("http") || value.startsWith("/")) {
               return true;
             }
             // Check file extension for local files

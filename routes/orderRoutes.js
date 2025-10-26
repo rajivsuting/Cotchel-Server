@@ -193,7 +193,7 @@ router.put(
 // Admin Routes (all order management capabilities)
 router.get(
   "/admin/all-orders",
-  authMiddleware.verifyToken,
+  authMiddleware.verifyAdminToken,
   authMiddleware.restrictTo("Admin"),
   orderManagementController.getAdminOrders
 );

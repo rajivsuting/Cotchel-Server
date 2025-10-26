@@ -130,8 +130,16 @@ router.get("/google-signin", authController.continueWithGoogle);
 router.post("/resend-otp", authController.resendOTP);
 
 router.get("/pending-sellers", authController.getPendingSellers);
-router.patch("/approve-seller/:id", authController.approveSeller);
-router.patch("/reject-seller/:id", authController.rejectSeller);
+router.patch(
+  "/approve-seller/:id",
+  authMiddleware.verifyAdminToken,
+  authController.approveSeller
+);
+router.patch(
+  "/reject-seller/:id",
+  authMiddleware.verifyAdminToken,
+  authController.rejectSeller
+);
 
 router.get("/notifications", authController.getNotifications);
 router.patch("/notifications/:id/read", authController.markNotificationAsRead);

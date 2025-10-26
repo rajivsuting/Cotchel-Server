@@ -541,9 +541,11 @@ exports.createOrderFromCart = async (req, res) => {
       throw new OrderError("Buyer details not found", 404);
     }
 
-    // Reserve stock for all items
-    console.log("Reserving stock for items...");
-    await reserveStock(cart.items, session);
+    // Note: Stock will be deducted only after successful payment verification
+    // This prevents stock deduction if payment fails or is abandoned
+    console.log(
+      "Order created with pending payment - stock will be deducted after payment success"
+    );
 
     const sellerOrders = cart.items.reduce((acc, item) => {
       if (!item.productId?.user) {
@@ -742,6 +744,43 @@ exports.verifyPayment = async (req, res) => {
     const platformFeePercentage = platformSettings?.platformFeePercentage || 10; // Default to 10% if no settings found
     console.log("Using platform fee percentage:", platformFeePercentage);
 
+    // Deduct stock only after successful payment verification
+    console.log(
+      "Payment successful - validating and deducting stock for all orders..."
+    );
+
+    // First, validate that all products still have sufficient stock
+    for (const order of orders) {
+      for (const item of order.products) {
+        const product = await Product.findById(item.product).session(session);
+        if (!product) {
+          throw new OrderError(`Product not found: ${item.product}`, 404);
+        }
+
+        const requiredQuantity = item.quantity * item.lotSize;
+        if (product.quantityAvailable < requiredQuantity) {
+          throw new OrderError(
+            `Insufficient stock for ${product.title}. Available: ${product.quantityAvailable}, Required: ${requiredQuantity}`,
+            400,
+            {
+              productId: product._id,
+              available: product.quantityAvailable,
+              required: requiredQuantity,
+            }
+          );
+        }
+      }
+    }
+
+    // If all validations pass, deduct stock
+    await Promise.all(
+      orders.map(async (order) => {
+        // Deduct stock for this order's products
+        await reserveStock(order.products, session);
+        console.log(`Stock deducted for order ${order._id}`);
+      })
+    );
+
     // Update all orders and create transactions
     await Promise.all(
       orders.map(async (order) => {
@@ -793,9 +832,10 @@ exports.verifyPayment = async (req, res) => {
         order.sellerEarnings = sellerAmount;
         order.canCancel = true;
         order.canReturn = false;
+        order.stockDeducted = true; // Mark that stock has been deducted
         order.statusHistory.push({
           status: "Confirmed",
-          note: "Payment verified successfully, order confirmed",
+          note: "Payment verified successfully, stock deducted, order confirmed",
         });
         await order.save({ session });
 
@@ -1058,17 +1098,20 @@ exports.createOrderFromBuyNow = async (req, res) => {
 
 exports.getAllOrders = async (req, res) => {
   try {
-    const { _id: userId, role } = req.user;
+    const { _id: userId, role, lastActiveRole } = req.user;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
     let filter = {};
-    if (role === "Buyer") {
+    // Use lastActiveRole for filtering orders based on current mode
+    const activeRole = lastActiveRole || role;
+
+    if (activeRole === "Buyer") {
       filter.buyer = userId;
-    } else if (role === "Seller") {
+    } else if (activeRole === "Seller") {
       filter.seller = userId;
-    } else if (role !== "Admin") {
+    } else if (activeRole !== "Admin") {
       return res.status(403).json({ message: "Unauthorized access" });
     }
 

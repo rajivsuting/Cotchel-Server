@@ -649,10 +649,31 @@ exports.getAdminOrders = async (req, res) => {
 
     const total = await Order.countDocuments(filter);
 
+    // Format orders to match frontend expectations
+    const formattedOrders = orders.map((order) => ({
+      orderId: order._id,
+      buyer: order.buyer?.fullName || "Unknown Buyer",
+      seller: order.seller?.fullName || "Unknown Seller",
+      totalPrice: order.totalPrice,
+      paymentStatus: order.paymentStatus,
+      status: order.status,
+      createdAt: order.createdAt,
+      address: order.address,
+      products: order.products.map((productItem) => ({
+        productId: productItem.product?._id,
+        name: productItem.product?.title || "Unknown Product",
+        featuredImage: productItem.product?.featuredImage || "/placeholder.png",
+        quantity: productItem.quantity,
+        lotSize: productItem.lotSize,
+        price: productItem.price,
+        totalPrice: productItem.totalPrice,
+      })),
+    }));
+
     res.status(200).json({
       success: true,
       data: {
-        orders,
+        orders: formattedOrders,
         pagination: {
           currentPage: parseInt(page),
           totalPages: Math.ceil(total / limit),

@@ -295,6 +295,7 @@ exports.getAllProducts = async (req, res) => {
     if (role === "Buyer") {
       filter.quantityAvailable = { $gt: 0 };
       filter.isActive = true; // Only show active products to buyers
+      filter.sellerDeleted = { $ne: true }; // Exclude products from deleted sellers
     } else if (role === "Seller") {
       filter.user = userId;
     }
@@ -454,6 +455,7 @@ exports.searchProduct = async (req, res) => {
         { user: { $in: userIds } },
       ],
       isActive: true,
+      sellerDeleted: { $ne: true }, // Exclude products from deleted sellers
     })
       .populate({
         path: "user",
@@ -510,6 +512,7 @@ exports.searchSuggestions = async (req, res) => {
         ],
         isActive: true,
         quantityAvailable: { $gt: 0 }, // Only show products in stock
+        sellerDeleted: { $ne: true }, // Exclude products from deleted sellers
       },
       {
         title: 1,

@@ -510,31 +510,62 @@ exports.addSellerDetails = async (req, res) => {
         .json({ message: "Please verify your email first." });
     }
 
-    if (user.sellerDetails) {
+    // Check if user already has seller details and is not rejected
+    if (user.sellerDetails && user.sellerDetailsStatus !== "rejected") {
       return res.status(400).json({ message: "Seller details already added." });
     }
 
-    // Create seller details
-    const sellerDetails = await SellerDetails.create({
-      businessName,
-      gstin,
-      pan,
-      bankName,
-      accountName,
-      accountNumber,
-      ifscCode,
-      branch,
-      addressLine1,
-      addressLine2,
-      city,
-      state,
-      postalCode,
-      country: "India",
-    });
+    let sellerDetails;
 
-    // Update user
-    user.sellerDetails = sellerDetails._id;
+    // Check if user is reapplying after rejection
+    if (user.sellerDetails && user.sellerDetailsStatus === "rejected") {
+      // Update existing seller details
+      sellerDetails = await SellerDetails.findByIdAndUpdate(
+        user.sellerDetails,
+        {
+          businessName,
+          gstin,
+          pan,
+          bankName,
+          accountName,
+          accountNumber,
+          ifscCode,
+          branch,
+          addressLine1,
+          addressLine2,
+          city,
+          state,
+          postalCode,
+          country: "India",
+        },
+        { new: true }
+      );
+    } else {
+      // Create new seller details for first-time applicants
+      sellerDetails = await SellerDetails.create({
+        businessName,
+        gstin,
+        pan,
+        bankName,
+        accountName,
+        accountNumber,
+        ifscCode,
+        branch,
+        addressLine1,
+        addressLine2,
+        city,
+        state,
+        postalCode,
+        country: "India",
+      });
+
+      // Link seller details to user for new applicants
+      user.sellerDetails = sellerDetails._id;
+    }
+
+    // Update user status
     user.isVerifiedSeller = false;
+    user.sellerDetailsStatus = "pending"; // Reset status to pending for reapplication
     const updatedUser = await user.save();
 
     // Populate the seller details for the response
@@ -642,6 +673,7 @@ exports.getClientProfile = async (req, res) => {
       addresses: user.addresses || [],
       sellerDetails: user.sellerDetails || null,
       isVerifiedSeller: user.isVerifiedSeller || false,
+      sellerDetailsStatus: user.sellerDetailsStatus || "pending",
     };
 
     res.status(200).json({
@@ -1224,8 +1256,16 @@ exports.deleteUser = async (req, res) => {
       Address.deleteMany({ user: id }),
       // Delete user's seller details
       SellerDetails.deleteMany({ user: id }),
-      // Delete user's products
-      Product.deleteMany({ user: id }),
+      // Soft delete user's products - make them inactive instead of deleting
+      Product.updateMany(
+        { user: id },
+        {
+          isActive: false,
+          sellerDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: req.user._id, // Track which admin deleted the seller
+        }
+      ),
       // Delete user's orders (as buyer)
       Order.deleteMany({ buyer: id }),
       // Delete user's orders (as seller)
@@ -1257,6 +1297,10 @@ exports.getPendingSellers = async (req, res) => {
     const users = await User.find({
       sellerDetails: { $exists: true, $ne: null }, // Has sellerDetails
       isVerifiedSeller: false, // Not yet verified
+      $or: [
+        { sellerDetailsStatus: { $exists: false } }, // No status set (legacy)
+        { sellerDetailsStatus: "pending" }, // Explicitly pending
+      ],
     }).populate("sellerDetails");
     res.status(200).json({ data: { users } });
   } catch (error) {
@@ -1269,7 +1313,11 @@ exports.approveSeller = async (req, res) => {
   try {
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { isVerifiedSeller: true, role: "Seller" }, // Update role to Seller
+      {
+        isVerifiedSeller: true,
+        // Keep role as "Buyer" - user will manually switch when ready
+        sellerDetailsStatus: "approved", // Set status to approved
+      },
       { new: true }
     ).populate("sellerDetails");
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -1291,13 +1339,28 @@ exports.approveSeller = async (req, res) => {
 // Reject seller
 exports.rejectSeller = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      {
+        isVerifiedSeller: false, // Explicitly set to false
+        // Keep sellerDetails but mark as rejected
+        sellerDetailsStatus: "rejected", // Add status tracking
+      },
+      { new: true }
+    ).populate("sellerDetails");
+
     if (!user) return res.status(404).json({ message: "User not found" });
-    // Optionally clear sellerDetails or leave as is
-    // user.sellerDetails = null; // Uncomment to clear
-    await user.save();
+
     // Notify admins of seller rejection
     await NotificationService.notifyVerificationStatus(user._id, "rejected");
+
+    // Emit notification to user about rejection
+    const { emitNotification } = require("../sockets/notificationSocket");
+    emitNotification(req.io, "accountVerification", {
+      sellerId: user._id,
+      status: "rejected",
+    });
+
     res.status(200).json({ message: "Seller rejected", data: user });
   } catch (error) {
     res.status(500).json({ message: "Error rejecting seller", error });

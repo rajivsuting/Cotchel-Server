@@ -19,10 +19,12 @@ exports.verifyClientToken = async (req, res, next) => {
       return res.status(401).json({ error: "Invalid client token" });
     }
 
-    // Check if user account is still active
+    // Check if user account is still active and get complete user data
     try {
       const User = require("../models/User");
-      const currentUser = await User.findById(user._id).select("active");
+      const currentUser = await User.findById(user._id).select(
+        "active role lastActiveRole isVerifiedSeller"
+      );
 
       if (!currentUser) {
         return res.status(401).json({
@@ -41,7 +43,13 @@ exports.verifyClientToken = async (req, res, next) => {
         });
       }
 
-      req.user = user;
+      // Set complete user data including role and lastActiveRole
+      req.user = {
+        ...user,
+        role: currentUser.role,
+        lastActiveRole: currentUser.lastActiveRole,
+        isVerifiedSeller: currentUser.isVerifiedSeller,
+      };
       next();
     } catch (error) {
       console.error("Error checking user status:", error);
@@ -116,7 +124,23 @@ exports.restrictTo =
   (req, res, next) => {
     if (!req.user)
       return res.status(401).json({ error: "User not authenticated" });
-    if (!roles.includes(req.user.role))
+
+    // Debug logging
+    console.log("[DEBUG] restrictTo middleware:");
+    console.log("  - req.user.role:", req.user.role);
+    console.log("  - req.user.lastActiveRole:", req.user.lastActiveRole);
+    console.log("  - req.user.isVerifiedSeller:", req.user.isVerifiedSeller);
+    console.log("  - roles:", roles);
+
+    // For seller routes, check lastActiveRole instead of role
+    const userRole = roles.includes("Seller")
+      ? req.user.lastActiveRole
+      : req.user.role;
+
+    console.log("  - userRole:", userRole);
+    console.log("  - roles.includes(userRole):", roles.includes(userRole));
+
+    if (!roles.includes(userRole))
       return res.status(403).json({ error: "Access denied" });
     next();
   };

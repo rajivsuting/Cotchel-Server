@@ -15,6 +15,21 @@ exports.addItemToCart = async (req, res) => {
       return res.status(404).json({ message: "Product not found." });
     }
 
+    // Check if product is from a deleted seller
+    if (product.sellerDeleted) {
+      return res.status(400).json({
+        message:
+          "This product is no longer available as the seller has been removed.",
+      });
+    }
+
+    // Check if product is active
+    if (!product.isActive) {
+      return res.status(400).json({
+        message: "This product is currently unavailable.",
+      });
+    }
+
     const userId = req.user;
     let cart = await Cart.findOne({ user: userId });
 

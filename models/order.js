@@ -139,6 +139,9 @@ const orderSchema = new mongoose.Schema({
   },
   cancellationApprovedAt: Date,
 
+  // Stock management
+  stockDeducted: { type: Boolean, default: false }, // Track if stock has been deducted
+
   // Return details
   returnRequestedAt: Date,
   returnApprovedAt: Date,

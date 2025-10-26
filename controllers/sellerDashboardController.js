@@ -16,7 +16,7 @@ const sellerDashboardController = {
 
       // Verify seller status
       const seller = await User.findById(sellerId);
-      if (!seller || seller.role !== "Seller" || !seller.isVerifiedSeller) {
+      if (!seller || !seller.isVerifiedSeller) {
         throw new NotFoundError("Seller not found or not verified");
       }
 
