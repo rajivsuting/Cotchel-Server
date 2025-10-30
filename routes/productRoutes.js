@@ -8,6 +8,11 @@ router.post("/", authMiddleware.verifyToken, productController.createProduct);
 
 router.get("/", authMiddleware.optionalAuth, productController.getAllProducts);
 router.get(
+  "/admin/all",
+  authMiddleware.verifyAdminToken,
+  productController.getAllProductsForAdmin
+);
+router.get(
   "/top-selling",
   authMiddleware.verifyToken,
   productController.getTopSellingProducts

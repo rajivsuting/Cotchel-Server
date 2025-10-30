@@ -42,7 +42,6 @@ exports.verifyClientToken = async (req, res, next) => {
           code: "ACCOUNT_DEACTIVATED",
         });
       }
-
       // Set complete user data including role and lastActiveRole
       req.user = {
         ...user,
@@ -145,15 +144,113 @@ exports.restrictTo =
     next();
   };
 
-exports.optionalAuth = (req, res, next) => {
-  const accessToken = req.cookies?.accessToken;
+exports.optionalAuth = async (req, res, next) => {
+  const adminToken = req.cookies?.admin_accessToken;
+  const clientToken = req.cookies?.client_accessToken;
+  const legacyToken = req.cookies?.accessToken;
+
+  // Determine if request is from admin dashboard
+  // Check Referer, Origin, or custom header to identify admin requests
+  const referer = req.headers.referer || req.headers.origin || "";
+  const isAdminRequest =
+    referer.includes("/admin") ||
+    referer.includes("admin") ||
+    req.headers["x-request-source"] === "admin" ||
+    req.path.startsWith("/admin/");
+
+  // Token selection logic:
+  // 1. If both tokens exist: use admin token if request is from admin dashboard, otherwise client token
+  // 2. If only one exists: use that one
+  // 3. Fallback to legacy token
+  let accessToken = null;
+  let tokenType = null;
+
+  if (adminToken && clientToken) {
+    // Both exist - choose based on request context
+    if (isAdminRequest) {
+      accessToken = adminToken;
+      tokenType = "admin";
+    } else {
+      accessToken = clientToken;
+      tokenType = "client";
+    }
+  } else if (adminToken) {
+    accessToken = adminToken;
+    tokenType = "admin";
+  } else if (clientToken) {
+    accessToken = clientToken;
+    tokenType = "client";
+  } else if (legacyToken) {
+    accessToken = legacyToken;
+    tokenType = "client";
+  }
+
   if (!accessToken) {
     req.user = null;
     return next();
   }
 
-  jwt.verify(accessToken, process.env.JWT_SECRET, (err, user) => {
-    req.user = err ? null : user;
+  jwt.verify(accessToken, process.env.JWT_SECRET, async (err, user) => {
+    if (err) {
+      req.user = null;
+      return next();
+    }
+
+    // If it's an admin token, verify admin status
+    if (tokenType === "admin") {
+      try {
+        const User = require("../models/User");
+        const currentUser = await User.findById(user._id).select(
+          "active role lastActiveRole isVerifiedSeller"
+        );
+
+        if (
+          !currentUser ||
+          !currentUser.active ||
+          currentUser.role !== "Admin"
+        ) {
+          req.user = null;
+          return next();
+        }
+
+        req.user = {
+          ...user,
+          role: currentUser.role,
+          lastActiveRole: currentUser.lastActiveRole,
+          isVerifiedSeller: currentUser.isVerifiedSeller,
+        };
+      } catch (error) {
+        console.error("Error checking admin status in optionalAuth:", error);
+        req.user = null;
+      }
+    } else if (tokenType === "client") {
+      // If it's a client token, verify user status like verifyClientToken does
+      try {
+        const User = require("../models/User");
+        const currentUser = await User.findById(user._id).select(
+          "active role lastActiveRole isVerifiedSeller"
+        );
+
+        if (!currentUser || !currentUser.active) {
+          req.user = null;
+          return next();
+        }
+
+        req.user = {
+          ...user,
+          role: currentUser.role,
+          lastActiveRole: currentUser.lastActiveRole,
+          isVerifiedSeller: currentUser.isVerifiedSeller,
+        };
+      } catch (error) {
+        console.error("Error checking user status in optionalAuth:", error);
+        req.user = null;
+      }
+    } else {
+      // Legacy token or unknown - set user as-is
+      req.user = user;
+    }
+
     next();
   });
 };

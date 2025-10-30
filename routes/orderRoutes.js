@@ -11,13 +11,24 @@ const {
   fraudDetection,
 } = require("../middleware/securityMiddleware");
 
-router.use(bodyParser.raw({ type: "application/json" }));
-
 // Get all orders
 router.get("/", authMiddleware.verifyToken, orderController.getAllOrders);
 
-// Payment verification
-router.post("/razorpay-webhook", orderController.verifyPayment);
+// Payment verification (needs JSON body, not raw - must be before raw parser)
+router.post(
+  "/razorpay-webhook",
+  (req, res, next) => {
+    console.log("[ROUTE DEBUG] /razorpay-webhook route hit");
+    next();
+  },
+  authMiddleware.verifyClientToken,
+  orderController.verifyPayment
+);
+
+// Webhook routes (need raw body for signature verification)
+router.use(bodyParser.raw({ type: "application/json" }));
+router.post("/webhook/payment", webhookController.handlePaymentWebhook);
+router.post("/webhook/shipment", webhookController.handleShipmentWebhook);
 
 // Order creation routes with security middleware
 router.post(
@@ -35,10 +46,6 @@ router.post(
   fraudDetection,
   orderController.createOrderFromBuyNow
 );
-
-// Webhook routes
-router.post("/webhook/payment", webhookController.handlePaymentWebhook);
-router.post("/webhook/shipment", webhookController.handleShipmentWebhook);
 
 // Get all orders by payment transaction ID (for multi-seller orders)
 router.get(

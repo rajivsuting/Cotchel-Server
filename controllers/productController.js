@@ -180,8 +180,33 @@ exports.getAllProducts = async (req, res) => {
   } = req.query;
 
   const user = req.user || {};
-  const { role, _id: userId } = user;
-  console.log(req.query);
+  const { role, lastActiveRole, _id: userId, isVerifiedSeller } = user;
+
+  // Determine user's effective role - for sellers, use lastActiveRole
+  // BUT: Admins should always be treated as Admin, not Seller
+  const userRole =
+    role === "Admin" ? "Admin" : lastActiveRole === "Seller" ? "Seller" : role;
+
+  // Convert userId to ObjectId if it exists and is a string
+  let sellerUserId = null;
+  if (userId) {
+    sellerUserId =
+      typeof userId === "string" && mongoose.Types.ObjectId.isValid(userId)
+        ? new mongoose.Types.ObjectId(userId)
+        : userId;
+  }
+
+  console.log("[DEBUG] getAllProducts:", {
+    userId,
+    sellerUserId,
+    userIdType: typeof userId,
+    role,
+    lastActiveRole,
+    isVerifiedSeller,
+    userRole,
+    isAdmin: role === "Admin",
+    willFilterBySeller: lastActiveRole === "Seller" && sellerUserId,
+  });
 
   try {
     const filter = {};
@@ -196,16 +221,22 @@ exports.getAllProducts = async (req, res) => {
 
     let userIds = [];
 
-    if (search) {
-      const matchingUsers = await User.find(
-        {
-          fullName: { $regex: search, $options: "i" },
-          isVerifiedSeller: true,
-        },
-        { _id: 1 }
-      );
+    // Only search across sellers if user is not a seller themselves
+    // If they are a seller, we'll filter by their own products only
+    const shouldSearchSellers = lastActiveRole !== "Seller";
 
-      userIds = matchingUsers.map((user) => user._id);
+    if (search) {
+      if (shouldSearchSellers) {
+        const matchingUsers = await User.find(
+          {
+            fullName: { $regex: search, $options: "i" },
+            isVerifiedSeller: true,
+          },
+          { _id: 1 }
+        );
+
+        userIds = matchingUsers.map((user) => user._id);
+      }
 
       const matchingCategories = await Category.find(
         { name: { $regex: search, $options: "i" } },
@@ -226,8 +257,12 @@ exports.getAllProducts = async (req, res) => {
         { brand: { $regex: search, $options: "i" } },
         { category: { $in: categoryIds } },
         { subCategory: { $in: subCategoryIds } },
-        { user: { $in: userIds } },
       ];
+
+      // Only add user search to $or if we're not filtering by a specific seller
+      if (shouldSearchSellers && userIds.length > 0) {
+        filter.$or.push({ user: { $in: userIds } });
+      }
     }
 
     // Ratings: use $gte for 'X★ & up'
@@ -292,13 +327,33 @@ exports.getAllProducts = async (req, res) => {
     }
 
     // Apply role-based filters last to avoid conflicts
-    if (role === "Buyer") {
+    // IMPORTANT: Seller filter must be applied to ensure sellers only see their own products
+    // Primary check: lastActiveRole === "Seller" (this is set when user switches to seller mode)
+    // Fallback check: isVerifiedSeller is true AND user is not an Admin
+    const shouldFilterBySeller =
+      (lastActiveRole === "Seller" || (isVerifiedSeller && role !== "Admin")) &&
+      sellerUserId;
+
+    if (shouldFilterBySeller) {
+      // Filter products to only show the seller's own products
+      // Check lastActiveRole directly to handle cases where admin token exists but user is acting as seller
+      // If lastActiveRole is "Seller", always filter by seller, regardless of role (which might be "Admin" due to token priority)
+      filter.user = sellerUserId;
+      console.log(
+        "[DEBUG] Applied seller filter with userId:",
+        sellerUserId.toString()
+      );
+    } else if (userRole === "Buyer") {
       filter.quantityAvailable = { $gt: 0 };
       filter.isActive = true; // Only show active products to buyers
       filter.sellerDeleted = { $ne: true }; // Exclude products from deleted sellers
-    } else if (role === "Seller") {
-      filter.user = userId;
     }
+    // Users without lastActiveRole === "Seller" (and not Buyers) see all products - typically Admins
+
+    console.log(
+      "[DEBUG] getAllProducts filter:",
+      JSON.stringify(filter, null, 2)
+    );
 
     const validSortFields = ["createdAt", "price", "ratings", "lotSize"];
     const defaultSort = order === "desc" ? -1 : 1;
@@ -359,6 +414,180 @@ exports.getAllProducts = async (req, res) => {
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
+
+// Admin-only endpoint - returns ALL products without seller filtering
+exports.getAllProductsForAdmin = async (req, res) => {
+  const {
+    page = 1,
+    limit = 10,
+    category,
+    subCategories,
+    sortBy = "createdAt",
+    order = "desc",
+    search,
+    ratings,
+    lotSizeMin,
+    lotSizeMax,
+    minPrice,
+    maxPrice,
+    brands,
+    status,
+    lotSize,
+  } = req.query;
+
+  try {
+    const filter = {};
+
+    if (category) filter.category = category;
+    if (subCategories) {
+      filter.subCategory = { $in: subCategories.split(",") };
+    }
+    if (brands) {
+      filter.brand = { $in: brands.split(",") };
+    }
+
+    let userIds = [];
+
+    if (search) {
+      const matchingUsers = await User.find(
+        {
+          fullName: { $regex: search, $options: "i" },
+          isVerifiedSeller: true,
+        },
+        { _id: 1 }
+      );
+
+      userIds = matchingUsers.map((user) => user._id);
+
+      const matchingCategories = await Category.find(
+        { name: { $regex: search, $options: "i" } },
+        { _id: 1 }
+      );
+
+      const matchingSubCategories = await SubCategory.find(
+        { name: { $regex: search, $options: "i" } },
+        { _id: 1 }
+      );
+
+      const categoryIds = matchingCategories.map((cat) => cat._id);
+      const subCategoryIds = matchingSubCategories.map((sub) => sub._id);
+
+      filter.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { model: { $regex: search, $options: "i" } },
+        { brand: { $regex: search, $options: "i" } },
+        { category: { $in: categoryIds } },
+        { subCategory: { $in: subCategoryIds } },
+        { user: { $in: userIds } },
+      ];
+    }
+
+    // Ratings filter
+    if (ratings) {
+      const ratingValue = Number(ratings);
+      if (!isNaN(ratingValue)) {
+        filter.ratings = { $gte: ratingValue };
+      }
+    }
+
+    // Lot size filter
+    if (lotSizeMin || lotSizeMax) {
+      filter.lotSize = {};
+      if (lotSizeMin) {
+        const minValue = Number(lotSizeMin);
+        if (!isNaN(minValue)) {
+          filter.lotSize.$gte = minValue;
+        }
+      }
+      if (lotSizeMax) {
+        const maxValue = Number(lotSizeMax);
+        if (!isNaN(maxValue)) {
+          filter.lotSize.$lte = maxValue;
+        }
+      }
+    } else if (lotSize) {
+      if (typeof lotSize === "string") {
+        if (lotSize.endsWith("+")) {
+          const min = Number(lotSize.replace("+", ""));
+          if (!isNaN(min)) {
+            filter.lotSize = { $gte: min };
+          }
+        } else if (lotSize.includes("-")) {
+          const [min, max] = lotSize.split("-").map(Number);
+          if (!isNaN(min) && !isNaN(max)) {
+            filter.lotSize = { $gte: min, $lte: max };
+          }
+        } else {
+          const exactValue = Number(lotSize);
+          if (!isNaN(exactValue)) {
+            filter.lotSize = exactValue;
+          }
+        }
+      }
+    }
+
+    // Price filter
+    if (minPrice || maxPrice) {
+      filter.price = {};
+      if (minPrice) filter.price.$gte = parseFloat(minPrice);
+      if (maxPrice) filter.price.$lte = parseFloat(maxPrice);
+    }
+
+    // Status filter
+    if (status) {
+      if (status === "Active") {
+        filter.quantityAvailable = { $gt: 50 };
+      } else if (status === "Low Stock") {
+        filter.quantityAvailable = { $gt: 0, $lte: 50 };
+      } else if (status === "Out of Stock") {
+        filter.quantityAvailable = 0;
+      }
+    }
+
+    // NO seller filtering - admins see all products
+
+    const validSortFields = ["createdAt", "price", "ratings", "lotSize"];
+    const defaultSort = order === "desc" ? -1 : 1;
+    const sortOptions = validSortFields.includes(sortBy)
+      ? { [sortBy]: order === "desc" ? -1 : 1 }
+      : { createdAt: defaultSort };
+
+    const parsedLimit = isNaN(parseInt(limit, 10)) ? 10 : parseInt(limit, 10);
+    const parsedPage = isNaN(parseInt(page, 10)) ? 1 : parseInt(page, 10);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const [products, total] = await Promise.all([
+      Product.find(filter)
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(parsedLimit)
+        .populate("category")
+        .populate("subCategory")
+        .populate("brand")
+        .populate({
+          path: "user",
+          select: "fullName sellerDetails",
+          populate: {
+            path: "sellerDetails",
+            select: "businessName",
+          },
+        }),
+      Product.countDocuments(filter),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      totalProducts: total,
+      totalPages: total > 0 ? Math.ceil(total / parsedLimit) : 1,
+      currentPage: parsedPage,
+      products,
+    });
+  } catch (error) {
+    console.error("Error fetching products for admin:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 exports.getProductById = async (req, res, next) => {
   try {
     const product = await Product.findById(req.params.id)

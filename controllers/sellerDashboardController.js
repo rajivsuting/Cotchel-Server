@@ -8,14 +8,39 @@ const mongoose = require("mongoose");
 const sellerDashboardController = {
   // Get all dashboard data in a single request
   getDashboardData: async (req, res, next) => {
+    console.log("[DEBUG] ===== SELLER DASHBOARD REQUEST START =====");
     console.log("[DEBUG] Starting getDashboardData");
     console.log("[DEBUG] User ID:", req.user._id);
+    console.log("[DEBUG] User role:", req.user.role);
+    console.log("[DEBUG] User lastActiveRole:", req.user.lastActiveRole);
+    console.log("[DEBUG] User isVerifiedSeller:", req.user.isVerifiedSeller);
 
     try {
       const sellerId = req.user._id;
 
+      // Ensure sellerId is a valid ObjectId
+      if (!sellerId) {
+        throw new NotFoundError("Seller ID missing from request");
+      }
+
+      // Convert sellerId to ObjectId if it's a string
+      const sellerObjectId = mongoose.Types.ObjectId.isValid(sellerId)
+        ? typeof sellerId === "string"
+          ? new mongoose.Types.ObjectId(sellerId)
+          : sellerId
+        : sellerId;
+
+      console.log("[DEBUG] Seller ID:", {
+        original: sellerId,
+        type: typeof sellerId,
+        objectId: sellerObjectId.toString(),
+        isObjectId: sellerObjectId instanceof mongoose.Types.ObjectId,
+      });
+      console.log("[DEBUG] user role:", req.user.role);
+      console.log("[DEBUG] user lastActiveRole:", req.user.lastActiveRole);
+
       // Verify seller status
-      const seller = await User.findById(sellerId);
+      const seller = await User.findById(sellerObjectId);
       if (!seller || !seller.isVerifiedSeller) {
         throw new NotFoundError("Seller not found or not verified");
       }
@@ -34,6 +59,41 @@ const sellerDashboardController = {
       });
 
       console.log("[DEBUG] Starting parallel data fetch");
+      console.log("[DEBUG] Seller ID:", sellerObjectId.toString());
+      console.log(
+        "[DEBUG] Seller verification status:",
+        seller.isVerifiedSeller
+      );
+
+      // First, let's check what data actually exists for this seller
+      const allSellerOrders = await Order.find({ seller: sellerObjectId });
+      const allSellerProducts = await Product.find({ user: sellerObjectId });
+
+      console.log("[DEBUG] Raw seller data:");
+      console.log("  - Total orders for seller:", allSellerOrders.length);
+      console.log("  - Total products for seller:", allSellerProducts.length);
+
+      if (allSellerOrders.length > 0) {
+        console.log(
+          "  - Sample order statuses:",
+          allSellerOrders.map((o) => ({
+            id: o._id,
+            status: o.status,
+            paymentStatus: o.paymentStatus,
+          }))
+        );
+      }
+
+      if (allSellerProducts.length > 0) {
+        console.log(
+          "  - Sample products:",
+          allSellerProducts.map((p) => ({
+            id: p._id,
+            title: p.title,
+            isActive: p.isActive,
+          }))
+        );
+      }
 
       // Get all data in parallel
       const [
@@ -47,11 +107,22 @@ const sellerDashboardController = {
         recentOrders,
         topProducts,
       ] = await Promise.all([
-        // Today's sales
+        // Today's sales (include Confirmed, Completed, and Delivered orders)
         Order.find({
-          seller: sellerId,
+          seller: sellerObjectId,
           createdAt: { $gte: today, $lt: tomorrow },
-          status: { $in: ["Completed", "Delivered"] },
+          status: {
+            $in: [
+              "Confirmed",
+              "Processing",
+              "Packed",
+              "Shipped",
+              "In Transit",
+              "Out for Delivery",
+              "Completed",
+              "Delivered",
+            ],
+          },
           paymentStatus: "Paid",
         }).populate({
           path: "products.product",
@@ -59,48 +130,89 @@ const sellerDashboardController = {
         }),
         // Yesterday's sales
         Order.find({
-          seller: sellerId,
+          seller: sellerObjectId,
           createdAt: { $gte: yesterday, $lt: today },
-          status: { $in: ["Completed", "Delivered"] },
+          status: {
+            $in: [
+              "Confirmed",
+              "Processing",
+              "Packed",
+              "Shipped",
+              "In Transit",
+              "Out for Delivery",
+              "Completed",
+              "Delivered",
+            ],
+          },
           paymentStatus: "Paid",
         }).populate({
           path: "products.product",
           select: "title price images",
         }),
-        // Active orders
+        // Active orders (orders that are not completed, cancelled, or returned)
         Order.countDocuments({
-          seller: sellerId,
-          status: { $in: ["Pending", "Processing", "Shipped"] },
+          seller: sellerObjectId,
+          status: {
+            $in: [
+              "Payment Pending",
+              "Confirmed",
+              "Processing",
+              "Packed",
+              "Shipped",
+              "In Transit",
+              "Out for Delivery",
+            ],
+          },
           paymentStatus: "Paid",
         }),
         // Yesterday's active orders
         Order.countDocuments({
-          seller: sellerId,
-          status: { $in: ["Pending", "Processing", "Shipped"] },
+          seller: sellerObjectId,
+          status: {
+            $in: [
+              "Payment Pending",
+              "Confirmed",
+              "Processing",
+              "Packed",
+              "Shipped",
+              "In Transit",
+              "Out for Delivery",
+            ],
+          },
           paymentStatus: "Paid",
           createdAt: { $gte: yesterday, $lt: today },
         }),
         // Total products
-        Product.countDocuments({ user: sellerId, isActive: true }),
+        Product.countDocuments({ user: sellerObjectId, isActive: true }),
         // Yesterday's products
         Product.countDocuments({
-          user: sellerId,
+          user: sellerObjectId,
           isActive: true,
           createdAt: { $gte: yesterday, $lt: today },
         }),
-        // All time orders for total sales
+        // All time orders for total sales (include all paid orders except cancelled)
         Order.find({
-          seller: sellerId,
-          status: { $in: ["Completed", "Delivered"] },
+          seller: sellerObjectId,
+          status: {
+            $in: [
+              "Confirmed",
+              "Processing",
+              "Packed",
+              "Shipped",
+              "In Transit",
+              "Out for Delivery",
+              "Completed",
+              "Delivered",
+            ],
+          },
           paymentStatus: "Paid",
         }).populate({
           path: "products.product",
           select: "title price images",
         }),
-        // Recent orders with populated data
+        // Recent orders with populated data (show all orders, not just paid)
         Order.find({
-          seller: sellerId,
-          paymentStatus: "Paid",
+          seller: sellerObjectId,
         })
           .sort({ createdAt: -1 })
           .limit(10)
@@ -113,9 +225,20 @@ const sellerDashboardController = {
         Order.aggregate([
           {
             $match: {
-              seller: new mongoose.Types.ObjectId(sellerId),
+              seller: sellerObjectId,
               paymentStatus: "Paid",
-              status: { $in: ["Completed", "Delivered"] },
+              status: {
+                $in: [
+                  "Confirmed",
+                  "Processing",
+                  "Packed",
+                  "Shipped",
+                  "In Transit",
+                  "Out for Delivery",
+                  "Completed",
+                  "Delivered",
+                ],
+              },
             },
           },
           { $unwind: "$products" },
@@ -142,7 +265,7 @@ const sellerDashboardController = {
                         { $eq: ["$_id", "$$productId"] },
                         { $eq: ["$isActive", true] },
                         {
-                          $eq: ["$user", new mongoose.Types.ObjectId(sellerId)],
+                          $eq: ["$user", sellerObjectId],
                         },
                       ],
                     },
@@ -258,13 +381,19 @@ const sellerDashboardController = {
         })),
       };
 
-      console.log("[DEBUG] Final dashboard data structure:", {
-        statsCount: dashboardData.stats.length,
-        recentOrdersCount: dashboardData.recentOrders.length,
-        topProductsCount: dashboardData.topProducts.length,
-      });
+      console.log("[DEBUG] ===== SELLER DASHBOARD RESPONSE =====");
+      console.log("[DEBUG] Stats:", dashboardData.stats);
+      console.log("[DEBUG] Recent Orders:", dashboardData.recentOrders);
+      console.log("[DEBUG] Top Products:", dashboardData.topProducts);
+      console.log("[DEBUG] ===== SELLER DASHBOARD REQUEST END =====");
 
-      res.json(dashboardData);
+      res.status(200).json({
+        success: true,
+        message: "Dashboard data fetched successfully",
+        stats: dashboardData.stats,
+        recentOrders: dashboardData.recentOrders,
+        topProducts: dashboardData.topProducts,
+      });
     } catch (error) {
       console.error("[ERROR] Dashboard data fetch failed:", {
         message: error.message,
@@ -272,6 +401,84 @@ const sellerDashboardController = {
         name: error.name,
       });
       next(new DatabaseError("Failed to fetch dashboard data", error));
+    }
+  },
+
+  // Debug endpoint to check seller data
+  debugSellerData: async (req, res, next) => {
+    try {
+      const sellerId = req.user._id;
+      const sellerObjectId = mongoose.Types.ObjectId.isValid(sellerId)
+        ? typeof sellerId === "string"
+          ? new mongoose.Types.ObjectId(sellerId)
+          : sellerId
+        : sellerId;
+
+      // Get all data for this seller
+      const [allOrders, allProducts, seller] = await Promise.all([
+        Order.find({ seller: sellerObjectId }),
+        Product.find({ user: sellerObjectId }),
+        User.findById(sellerObjectId),
+      ]);
+
+      // Group orders by status
+      const ordersByStatus = allOrders.reduce((acc, order) => {
+        acc[order.status] = (acc[order.status] || 0) + 1;
+        return acc;
+      }, {});
+
+      // Group orders by payment status
+      const ordersByPaymentStatus = allOrders.reduce((acc, order) => {
+        acc[order.paymentStatus] = (acc[order.paymentStatus] || 0) + 1;
+        return acc;
+      }, {});
+
+      // Group products by active status
+      const productsByStatus = allProducts.reduce((acc, product) => {
+        acc[product.isActive ? "active" : "inactive"] =
+          (acc[product.isActive ? "active" : "inactive"] || 0) + 1;
+        return acc;
+      }, {});
+
+      res.status(200).json({
+        success: true,
+        debug: {
+          seller: {
+            id: seller._id,
+            email: seller.email,
+            role: seller.role,
+            lastActiveRole: seller.lastActiveRole,
+            isVerifiedSeller: seller.isVerifiedSeller,
+            sellerDetailsStatus: seller.sellerDetailsStatus,
+          },
+          orders: {
+            total: allOrders.length,
+            byStatus: ordersByStatus,
+            byPaymentStatus: ordersByPaymentStatus,
+            sample: allOrders.slice(0, 3).map((o) => ({
+              id: o._id,
+              status: o.status,
+              paymentStatus: o.paymentStatus,
+              totalPrice: o.totalPrice,
+              createdAt: o.createdAt,
+            })),
+          },
+          products: {
+            total: allProducts.length,
+            byStatus: productsByStatus,
+            sample: allProducts.slice(0, 3).map((p) => ({
+              id: p._id,
+              title: p.title,
+              isActive: p.isActive,
+              quantityAvailable: p.quantityAvailable,
+              createdAt: p.createdAt,
+            })),
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Error in debugSellerData:", error);
+      next(error);
     }
   },
 };

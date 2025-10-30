@@ -243,23 +243,51 @@ async function updateOrderStatus(orderId, status, note) {
 // Helper function to reserve stock
 async function reserveStock(items, session) {
   for (const item of items) {
-    const product = await Product.findById(item.productId).populate("user");
-    if (!product) {
-      throw new OrderError("Product not found", 404, {
-        productId: item.productId,
+    // Support both item.productId (from cart) and item.product (from order)
+    const productId = item.productId || item.product;
+
+    if (!productId) {
+      throw new OrderError("Product ID missing in order item", 400, {
+        item: item,
       });
     }
-    if (product.quantityAvailable < item.quantity * item.lotSize) {
+
+    console.log(`[DEBUG] reserveStock looking for product:`, {
+      productId,
+      hasProductId: !!item.productId,
+      hasProduct: !!item.product,
+    });
+
+    let product = await Product.findById(productId)
+      .session(session)
+      .populate("user");
+
+    // If not found with session, try without session
+    if (!product) {
+      console.log(
+        `[DEBUG] Product not found with session in reserveStock, trying without session...`
+      );
+      product = await Product.findById(productId).populate("user");
+    }
+
+    if (!product) {
+      throw new OrderError("Product not found", 404, {
+        productId: productId,
+      });
+    }
+
+    const requiredQuantity = item.quantity * item.lotSize;
+    if (product.quantityAvailable < requiredQuantity) {
       throw new OrderError(`Insufficient stock for ${product.title}`, 400, {
         productId: product._id,
         available: product.quantityAvailable,
-        requested: item.quantity * item.lotSize,
+        requested: requiredQuantity,
       });
     }
     console.log(
       `Current stock for ${product.title}: ${product.quantityAvailable}`
     );
-    product.quantityAvailable -= item.quantity * item.lotSize;
+    product.quantityAvailable -= requiredQuantity;
     await product.save({ session });
     console.log(
       `Updated stock for ${product.title}: ${product.quantityAvailable}`
@@ -666,11 +694,19 @@ exports.createOrderFromCart = async (req, res) => {
 
 // Verify Payment
 exports.verifyPayment = async (req, res) => {
+  console.log("[DEBUG] ===== PAYMENT VERIFICATION START =====");
+  console.log("[DEBUG] Request body:", req.body);
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const { order_id, payment_id, signature } = req.body;
+    console.log("[DEBUG] Payment details:", {
+      order_id,
+      payment_id,
+      signature,
+    });
     const body = `${order_id}|${payment_id}`;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -682,9 +718,32 @@ exports.verifyPayment = async (req, res) => {
     }
 
     // Find all orders with the same paymentTransactionId
+    console.log(
+      "[DEBUG] Looking for orders with paymentTransactionId:",
+      order_id
+    );
     const orders = await Order.find({
       paymentTransactionId: order_id,
     }).session(session);
+
+    console.log("[DEBUG] Found orders:", orders.length);
+    if (orders.length > 0) {
+      console.log(
+        "[DEBUG] Order details:",
+        orders.map((o) => ({
+          id: o._id.toString(),
+          products: o.products.map((p) => ({
+            product: p.product?.toString ? p.product.toString() : p.product,
+            productType: typeof p.product,
+            productIsObjectId: p.product instanceof mongoose.Types.ObjectId,
+            quantity: p.quantity,
+            lotSize: p.lotSize,
+          })),
+          status: o.status,
+          paymentStatus: o.paymentStatus,
+        }))
+      );
+    }
 
     if (!orders.length) {
       throw new OrderError("Orders not found", 404);
@@ -752,9 +811,76 @@ exports.verifyPayment = async (req, res) => {
     // First, validate that all products still have sufficient stock
     for (const order of orders) {
       for (const item of order.products) {
-        const product = await Product.findById(item.product).session(session);
+        // Ensure product ID is a valid ObjectId
+        let productId = item.product;
+        if (typeof productId === "string") {
+          productId = new mongoose.Types.ObjectId(productId);
+        }
+
+        console.log(`[DEBUG] Looking for product:`, {
+          original: item.product,
+          converted: productId,
+          type: typeof item.product,
+          isObjectId: productId instanceof mongoose.Types.ObjectId,
+        });
+
+        // Try finding the product with and without session if session fails
+        let product = await Product.findById(productId).session(session);
+
+        // If not found with session, try without session (session might have read concerns)
         if (!product) {
-          throw new OrderError(`Product not found: ${item.product}`, 404);
+          console.log(
+            `[DEBUG] Product not found with session, trying without session...`
+          );
+          product = await Product.findById(productId);
+        }
+
+        console.log(
+          `[DEBUG] Product lookup result:`,
+          product
+            ? {
+                id: product._id.toString(),
+                title: product.title,
+                isActive: product.isActive,
+                sellerDeleted: product.sellerDeleted,
+                quantityAvailable: product.quantityAvailable,
+              }
+            : "NOT FOUND - Product may have been deleted"
+        );
+
+        if (!product) {
+          console.error(
+            `[ERROR] Product not found during payment verification:`,
+            {
+              productId: item.product,
+              productIdType: typeof item.product,
+              productIdString: item.product?.toString(),
+              orderId: order._id,
+              itemQuantity: item.quantity,
+              allProductIds: order.products.map((p) => ({
+                id: p.product,
+                type: typeof p.product,
+              })),
+            }
+          );
+
+          // Try to find all products to see what exists
+          const allProducts = await Product.find({})
+            .limit(5)
+            .select("_id title");
+          console.log(
+            `[DEBUG] Sample products in DB:`,
+            allProducts.map((p) => p._id.toString())
+          );
+
+          throw new OrderError(
+            `Product not found for order. The product may have been deleted. Please contact support.`,
+            404,
+            {
+              productId: item.product?.toString(),
+              orderId: order._id.toString(),
+            }
+          );
         }
 
         const requiredQuantity = item.quantity * item.lotSize;

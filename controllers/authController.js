@@ -164,14 +164,25 @@ exports.requestResetLink = async (req, res) => {
     const { html, text } = getPasswordResetTemplate(emailData);
 
     // Send professional password reset email
-    await sendEmail(
-      email,
-      "Reset Your Cotchel Password - Secure Your Account",
-      { html, text }
-    );
+    try {
+      await sendEmail(
+        email,
+        "Reset Your Cotchel Password - Secure Your Account",
+        { html, text }
+      );
+      console.log(`✅ Password reset email sent successfully to: ${email}`);
+    } catch (emailError) {
+      console.warn(
+        "⚠️ Email service not configured, but reset token generated:",
+        emailError.message
+      );
+      console.log(`🔗 Reset link for development: ${resetLink}`);
+    }
 
-    console.log(`✅ Password reset email sent successfully to: ${email}`);
-    res.json({ message: "Password reset link sent!" });
+    res.json({
+      message: "Password reset link sent!",
+      resetLink: process.env.NODE_ENV === "development" ? resetLink : undefined,
+    });
   } catch (error) {
     console.error("❌ Error sending password reset email:", error);
     res.status(500).json({
@@ -1315,7 +1326,7 @@ exports.approveSeller = async (req, res) => {
       req.params.id,
       {
         isVerifiedSeller: true,
-        // Keep role as "Buyer" - user will manually switch when ready
+        lastActiveRole: "Seller", // Set active role to Seller for dashboard access
         sellerDetailsStatus: "approved", // Set status to approved
       },
       { new: true }
@@ -1333,6 +1344,40 @@ exports.approveSeller = async (req, res) => {
     res.status(200).json({ message: "Seller approved", data: user });
   } catch (error) {
     res.status(500).json({ message: "Error approving seller", error });
+  }
+};
+
+// Update existing approved sellers' lastActiveRole to Seller (one-time fix)
+exports.updateApprovedSellersRole = async (req, res) => {
+  try {
+    // Check if user is admin
+    if (!req.user || req.user.role !== "Admin") {
+      return res.status(403).json({
+        message: "Access denied. Admin role required.",
+        statusCode: 403,
+      });
+    }
+
+    const result = await User.updateMany(
+      {
+        isVerifiedSeller: true,
+        lastActiveRole: "Buyer", // Only update those who are still set to Buyer
+      },
+      {
+        lastActiveRole: "Seller",
+      }
+    );
+
+    res.status(200).json({
+      message: `Updated ${result.modifiedCount} approved sellers' lastActiveRole to Seller`,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Error updating approved sellers role:", error);
+    res.status(500).json({
+      message: "Error updating approved sellers role",
+      error: error.message,
+    });
   }
 };
 
@@ -1474,9 +1519,15 @@ exports.updateLastActiveRole = async (req, res) => {
         .json({ error: "User is not verified as a seller" });
     }
 
-    // Update both role and lastActiveRole
-    user.role = role;
-    user.lastActiveRole = role;
+    // Update lastActiveRole, but preserve Admin role if user is an Admin
+    // Admins can switch between Buyer/Seller views without losing their Admin role
+    if (user.role === "Admin") {
+      user.lastActiveRole = role;
+    } else {
+      // For non-Admin users, update both role and lastActiveRole
+      user.role = role;
+      user.lastActiveRole = role;
+    }
     await user.save();
 
     // Create new tokens with updated role
