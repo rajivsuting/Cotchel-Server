@@ -1,14 +1,27 @@
 const express = require("express");
 const router = express.Router();
 const bannerController = require("../controllers/bannerController");
-// const { verifyAdmin } = require("../middlewares/auth"); // Optional
+const authMiddleware = require("../middleware/authMiddleware");
 
-// router.use(verifyAdmin); // Uncomment if needed
-
-router.post("/", bannerController.createBanner);
+// Public routes - anyone can view banners
 router.get("/", bannerController.getAllBanners);
 router.get("/:id", bannerController.getBannerById);
-router.put("/:id", bannerController.updateBanner);
-router.delete("/:id", bannerController.deleteBanner);
+
+// Admin-only routes - require admin authentication
+router.post(
+  "/",
+  authMiddleware.verifyAdminToken,
+  bannerController.createBanner
+);
+router.put(
+  "/:id",
+  authMiddleware.verifyAdminToken,
+  bannerController.updateBanner
+);
+router.delete(
+  "/:id",
+  authMiddleware.verifyAdminToken,
+  bannerController.deleteBanner
+);
 
 module.exports = router;

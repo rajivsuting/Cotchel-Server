@@ -290,14 +290,14 @@ exports.updateDetails = async (req, res) => {
 
     const isProduction = process.env.NODE_ENV === "production";
 
-    res.cookie("accessToken", accessToken, {
+    res.cookie("client_accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
       maxAge: 3600000 * 24 * 7,
     });
 
-    res.cookie("refreshToken", refreshToken, {
+    res.cookie("client_refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
@@ -605,14 +605,14 @@ exports.addSellerDetails = async (req, res) => {
 
       const isProduction = process.env.NODE_ENV === "production";
 
-      res.cookie("accessToken", accessToken, {
+      res.cookie("client_accessToken", accessToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "None" : "Lax",
         maxAge: 3600000 * 24 * 7,
       });
 
-      res.cookie("refreshToken", refreshToken, {
+      res.cookie("client_refreshToken", refreshToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "None" : "Lax",
@@ -937,14 +937,14 @@ exports.editUser = async (req, res) => {
 
       const isProduction = process.env.NODE_ENV === "production";
 
-      res.cookie("accessToken", accessToken, {
+      res.cookie("client_accessToken", accessToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "None" : "Lax",
         maxAge: 3600000 * 24 * 7,
       });
 
-      res.cookie("refreshToken", refreshToken, {
+      res.cookie("client_refreshToken", refreshToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "None" : "Lax",
@@ -988,6 +988,7 @@ exports.logoutUser = (req, res) => {
 
   const isProduction = process.env.NODE_ENV === "production";
 
+  // Clear legacy cookies
   res.clearCookie("accessToken", {
     httpOnly: true,
     secure: isProduction,
@@ -996,6 +997,36 @@ exports.logoutUser = (req, res) => {
   });
 
   res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "None" : "Lax",
+    path: "/",
+  });
+
+  // Clear client cookies
+  res.clearCookie("client_accessToken", {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "None" : "Lax",
+    path: "/",
+  });
+
+  res.clearCookie("client_refreshToken", {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "None" : "Lax",
+    path: "/",
+  });
+
+  // Clear admin cookies
+  res.clearCookie("admin_accessToken", {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "None" : "Lax",
+    path: "/",
+  });
+
+  res.clearCookie("admin_refreshToken", {
     httpOnly: true,
     secure: isProduction,
     sameSite: isProduction ? "None" : "Lax",
@@ -1034,14 +1065,14 @@ exports.continueWithGoogle = async (req, res) => {
 
     const isProduction = process.env.NODE_ENV === "production";
 
-    res.cookie("accessToken", accessToken, {
+    res.cookie("client_accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
       maxAge: 3600000 * 24 * 7,
     });
 
-    res.cookie("refreshToken", refreshToken, {
+    res.cookie("client_refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
@@ -1535,15 +1566,15 @@ exports.updateLastActiveRole = async (req, res) => {
 
     const isProduction = process.env.NODE_ENV === "production";
 
-    // Set new cookies
-    res.cookie("accessToken", accessToken, {
+    // Set new cookies with client-specific names
+    res.cookie("client_accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",
       maxAge: 3600000 * 24 * 7,
     });
 
-    res.cookie("refreshToken", refreshToken, {
+    res.cookie("client_refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "None" : "Lax",

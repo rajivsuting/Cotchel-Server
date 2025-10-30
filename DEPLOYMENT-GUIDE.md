@@ -105,7 +105,7 @@ This guide will help you deploy the CORS fixes to your production server to reso
 1. **Deploy frontend changes** to your hosting platform
 2. **Update environment variables** if needed:
    ```env
-   VITE_API_URL=https://starfish-app-6q6ot.ondigitalocean.app/api
+   VITE_API_URL=http://localhost:5000/api
    ```
 
 ## 🧪 Testing
@@ -117,7 +117,7 @@ curl -X OPTIONS \
   -H "Origin: http://localhost:5173" \
   -H "Access-Control-Request-Method: POST" \
   -H "Access-Control-Request-Headers: X-CSRF-Token, X-Request-ID" \
-  https://starfish-app-6q6ot.ondigitalocean.app/api/auth/login
+  http://localhost:5000/api/auth/login
 ```
 
 ### Test 2: Actual Request
@@ -126,7 +126,7 @@ curl -X OPTIONS \
 curl -X GET \
   -H "X-Request-ID: test-123" \
   -H "Origin: http://localhost:5173" \
-  https://starfish-app-6q6ot.ondigitalocean.app/api/health
+  http://localhost:5000/api/health
 ```
 
 ### Test 3: Frontend Integration

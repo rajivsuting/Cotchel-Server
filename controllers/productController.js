@@ -327,17 +327,13 @@ exports.getAllProducts = async (req, res) => {
     }
 
     // Apply role-based filters last to avoid conflicts
-    // IMPORTANT: Seller filter must be applied to ensure sellers only see their own products
-    // Primary check: lastActiveRole === "Seller" (this is set when user switches to seller mode)
-    // Fallback check: isVerifiedSeller is true AND user is not an Admin
-    const shouldFilterBySeller =
-      (lastActiveRole === "Seller" || (isVerifiedSeller && role !== "Admin")) &&
-      sellerUserId;
+    // IMPORTANT: ONLY filter by seller when lastActiveRole is explicitly "Seller"
+    // This prevents buyers with seller accounts from seeing only their own products
+    const shouldFilterBySeller = lastActiveRole === "Seller" && sellerUserId;
 
     if (shouldFilterBySeller) {
       // Filter products to only show the seller's own products
-      // Check lastActiveRole directly to handle cases where admin token exists but user is acting as seller
-      // If lastActiveRole is "Seller", always filter by seller, regardless of role (which might be "Admin" due to token priority)
+      // This only happens when user has explicitly switched to seller mode
       filter.user = sellerUserId;
       console.log(
         "[DEBUG] Applied seller filter with userId:",

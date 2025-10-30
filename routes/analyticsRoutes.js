@@ -1,10 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const analyticsController = require("../controllers/analyticsController");
-const { verifyToken, restrictTo } = require("../middleware/authMiddleware");
+const {
+  verifyAdminToken,
+  restrictTo,
+} = require("../middleware/authMiddleware");
 
 // All routes should be protected and only accessible by admin
-router.use(verifyToken);
+router.use(verifyAdminToken);
 
 // Get combined dashboard data
 router.get("/dashboard", analyticsController.getDashboardData);
