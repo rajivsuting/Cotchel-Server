@@ -48,9 +48,9 @@ exports.retryPayment = async (req, res) => {
     const { orderId } = req.params;
     const { _id: buyerId } = req.user;
 
-    // Find the order
+    // Find the order by either _id or orderId field
     const order = await Order.findOne({
-      _id: orderId,
+      $or: [{ _id: orderId }, { orderId: orderId }],
       buyer: buyerId,
     });
 
@@ -114,9 +114,9 @@ exports.cancelPendingOrder = async (req, res) => {
     const { orderId } = req.params;
     const { _id: buyerId } = req.user;
 
-    // Find the order
+    // Find the order by either _id or orderId field
     const order = await Order.findOne({
-      _id: orderId,
+      $or: [{ _id: orderId }, { orderId: orderId }],
       buyer: buyerId,
       status: "Payment Pending",
       paymentStatus: "Pending",
@@ -130,9 +130,10 @@ exports.cancelPendingOrder = async (req, res) => {
     }
 
     // Use OrderService to cancel the order properly
+    // Pass the MongoDB _id, not the orderId field
     const OrderService = require("../services/orderService");
     await OrderService.cancelOrder(
-      orderId,
+      order._id,
       "Cancelled by user - payment not completed",
       buyerId
     );
@@ -159,8 +160,9 @@ exports.checkPaymentRetryEligibility = async (req, res) => {
     const { orderId } = req.params;
     const { _id: buyerId } = req.user;
 
+    // Find the order by either _id or orderId field
     const order = await Order.findOne({
-      _id: orderId,
+      $or: [{ _id: orderId }, { orderId: orderId }],
       buyer: buyerId,
     });
 

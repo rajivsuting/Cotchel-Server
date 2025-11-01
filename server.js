@@ -21,7 +21,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
   "https://lionfish-app-by3cf.ondigitalocean.app", // frontend
-  "http://localhost:5000",
+  "https://starfish-app-6q6ot.ondigitalocean.app",
   ,
   "https://cotchel-admin-hy3ln.ondigitalocean.app",
   // add any other allowed origins

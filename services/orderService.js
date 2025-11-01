@@ -46,16 +46,22 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Send notification
-      await NotificationService.sendOrderConfirmation(order);
+      // Send notification (after transaction)
+      try {
+        await NotificationService.sendOrderConfirmation(order);
+      } catch (error) {
+        console.error("Error sending order confirmation notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -128,16 +134,22 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Send notification
-      await NotificationService.sendShipmentUpdate(order);
+      // Send notification (after transaction)
+      try {
+        await NotificationService.sendShipmentUpdate(order);
+      } catch (error) {
+        console.error("Error sending shipment update notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -224,16 +236,25 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Send notification
-      await NotificationService.sendDeliveryConfirmation(order);
+      // Send notification (after transaction)
+      try {
+        await NotificationService.sendDeliveryConfirmation(order);
+      } catch (error) {
+        console.error(
+          "Error sending delivery confirmation notification:",
+          error
+        );
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -269,16 +290,22 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Notify buyer about failed delivery
-      await NotificationService.sendDeliveryFailedNotification(order);
+      // Notify buyer about failed delivery (after transaction)
+      try {
+        await NotificationService.sendDeliveryFailedNotification(order);
+      } catch (error) {
+        console.error("Error sending delivery failed notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -313,13 +340,15 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -354,6 +383,10 @@ class OrderService {
 
       // If order is just confirmed/processing, allow immediate cancellation
       if (["Confirmed", "Processing"].includes(order.status)) {
+        // End this transaction before calling cancelOrder (which starts its own)
+        await session.abortTransaction();
+        session.endSession();
+
         return await this.cancelOrder(
           orderId,
           cancellationDetails.reason,
@@ -375,16 +408,25 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Notify seller about cancellation request
-      await NotificationService.sendCancellationRequest(order);
+      // Notify seller about cancellation request (after transaction)
+      try {
+        await NotificationService.sendCancellationRequest(order);
+      } catch (error) {
+        console.error(
+          "Error sending cancellation request notification:",
+          error
+        );
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -404,13 +446,23 @@ class OrderService {
         throw new Error("Order not found");
       }
 
-      // Restore stock for all products
-      for (const item of order.products) {
-        const totalQuantity = item.quantity * item.lotSize;
-        await Product.findByIdAndUpdate(
-          item.product._id,
-          { $inc: { quantityAvailable: totalQuantity } },
-          { session }
+      // Only restore stock if it was actually deducted
+      // For pending payment orders, stock is never deducted, so we shouldn't restore it
+      if (order.stockDeducted) {
+        console.log(
+          `Restoring stock for order ${orderId} (stock was deducted)`
+        );
+        for (const item of order.products) {
+          const totalQuantity = item.quantity * item.lotSize;
+          await Product.findByIdAndUpdate(
+            item.product._id,
+            { $inc: { quantityAvailable: totalQuantity } },
+            { session }
+          );
+        }
+      } else {
+        console.log(
+          `Skipping stock restoration for order ${orderId} (stock was never deducted)`
         );
       }
 
@@ -443,21 +495,31 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Clear cart if exists
+      // Clear cart if exists (after transaction)
       if (order.cartId) {
-        await require("../models/cartModel").findByIdAndDelete(order.cartId);
+        try {
+          await require("../models/cartModel").findByIdAndDelete(order.cartId);
+        } catch (error) {
+          console.error("Error clearing cart:", error);
+        }
       }
 
-      // Send notification
-      await NotificationService.sendCancellationConfirmation(order);
+      // Send notification (after transaction)
+      try {
+        await NotificationService.sendCancellationConfirmation(order);
+      } catch (error) {
+        console.error("Error sending cancellation notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -501,16 +563,22 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Notify seller about return request
-      await NotificationService.sendReturnRequest(order);
+      // Notify seller about return request (after transaction)
+      try {
+        await NotificationService.sendReturnRequest(order);
+      } catch (error) {
+        console.error("Error sending return request notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -560,13 +628,20 @@ class OrderService {
         throw new Error("Order not found");
       }
 
-      // Restore stock
-      for (const item of order.products) {
-        const totalQuantity = item.quantity * item.lotSize;
-        await Product.findByIdAndUpdate(
-          item.product._id,
-          { $inc: { quantityAvailable: totalQuantity } },
-          { session }
+      // Only restore stock if it was deducted (should always be true for returns, but safety check)
+      if (order.stockDeducted) {
+        console.log(`Restoring stock for returned order ${orderId}`);
+        for (const item of order.products) {
+          const totalQuantity = item.quantity * item.lotSize;
+          await Product.findByIdAndUpdate(
+            item.product._id,
+            { $inc: { quantityAvailable: totalQuantity } },
+            { session }
+          );
+        }
+      } else {
+        console.log(
+          `Warning: Return processed but stock was never deducted for order ${orderId}`
         );
       }
 
@@ -589,16 +664,22 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Notify buyer about return confirmation
-      await NotificationService.sendReturnConfirmation(order);
+      // Notify buyer about return confirmation (after transaction)
+      try {
+        await NotificationService.sendReturnConfirmation(order);
+      } catch (error) {
+        console.error("Error sending return confirmation notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -634,16 +715,22 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
-      // Send notification
-      await NotificationService.sendRefundConfirmation(order);
+      // Send notification (after transaction)
+      try {
+        await NotificationService.sendRefundConfirmation(order);
+      } catch (error) {
+        console.error("Error sending refund confirmation notification:", error);
+      }
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 
@@ -678,13 +765,15 @@ class OrderService {
 
       await order.save({ session });
       await session.commitTransaction();
+      session.endSession();
 
       return order;
     } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
       session.endSession();
+      throw error;
     }
   }
 

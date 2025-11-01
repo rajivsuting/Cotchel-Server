@@ -47,21 +47,49 @@ router.post(
   orderController.createOrderFromBuyNow
 );
 
-// Get all orders by payment transaction ID (for multi-seller orders)
+// ============ PAYMENT RETRY ROUTES (Like Flipkart) ============
+// IMPORTANT: These specific routes must come BEFORE the generic /:id route
+
+// Get pending payment orders
 router.get(
-  "/payment/:paymentTransactionId",
+  "/pending-payment",
   authMiddleware.verifyToken,
-  orderController.getOrdersByPaymentTransactionId
+  paymentRetryController.getPendingPaymentOrders
 );
 
-// Get order by ID
-router.get("/:id", authMiddleware.verifyToken, orderController.getOrderById);
+// Check if payment can be retried
+router.get(
+  "/:orderId/can-retry-payment",
+  authMiddleware.verifyToken,
+  paymentRetryController.checkPaymentRetryEligibility
+);
+
+// Retry payment for a pending order
+router.post(
+  "/:orderId/retry-payment",
+  authMiddleware.verifyToken,
+  paymentRetryController.retryPayment
+);
+
+// Cancel pending payment order
+router.delete(
+  "/:orderId/cancel-pending",
+  authMiddleware.verifyToken,
+  paymentRetryController.cancelPendingOrder
+);
 
 // Handle payment cancellation
 router.post(
   "/cancel-payment",
   authMiddleware.verifyToken,
   orderController.handlePaymentCancellation
+);
+
+// Get all orders by payment transaction ID (for multi-seller orders)
+router.get(
+  "/payment/:paymentTransactionId",
+  authMiddleware.verifyToken,
+  orderController.getOrdersByPaymentTransactionId
 );
 
 // Test endpoints (development only)
@@ -73,35 +101,8 @@ if (process.env.NODE_ENV === "development") {
   );
 }
 
-// ============ PAYMENT RETRY ROUTES (Like Flipkart) ============
-
-// Get pending payment orders
-router.get(
-  "/pending-payment",
-  authMiddleware.verifyToken,
-  paymentRetryController.getPendingPaymentOrders
-);
-
-// Retry payment for a pending order
-router.post(
-  "/:orderId/retry-payment",
-  authMiddleware.verifyToken,
-  paymentRetryController.retryPayment
-);
-
-// Check if payment can be retried
-router.get(
-  "/:orderId/can-retry-payment",
-  authMiddleware.verifyToken,
-  paymentRetryController.checkPaymentRetryEligibility
-);
-
-// Cancel pending payment order
-router.delete(
-  "/:orderId/cancel-pending",
-  authMiddleware.verifyToken,
-  paymentRetryController.cancelPendingOrder
-);
+// Get order by ID - MUST be last among GET routes
+router.get("/:id", authMiddleware.verifyToken, orderController.getOrderById);
 
 // ============ ORDER MANAGEMENT ROUTES (Production-Ready) ============
 
