@@ -151,6 +151,11 @@ exports.handlePaymentWebhook = async (req, res) => {
     }
 
     await order.save();
+
+    // Emit real-time order update
+    const { notifyOrderUpdate } = require("../utils/emitOrderUpdate");
+    await notifyOrderUpdate(order);
+
     res.status(200).json({ message: "Webhook processed successfully" });
   } catch (error) {
     console.error("Payment webhook error:", error);
@@ -160,48 +165,123 @@ exports.handlePaymentWebhook = async (req, res) => {
 
 // Verify Shiprocket webhook signature
 const verifyShiprocketSignature = (payload, signature) => {
-  const expectedSignature = crypto
-    .createHmac("sha256", process.env.SHIPROCKET_WEBHOOK_SECRET)
-    .update(JSON.stringify(payload))
-    .digest("hex");
-  return expectedSignature === signature;
+  // Skip verification in development if secret not set
+  if (!process.env.SHIPROCKET_WEBHOOK_SECRET) {
+    console.warn(
+      "⚠️ SHIPROCKET_WEBHOOK_SECRET not set, skipping signature verification (DEV ONLY)"
+    );
+    return process.env.NODE_ENV === "development";
+  }
+
+  try {
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.SHIPROCKET_WEBHOOK_SECRET)
+      .update(JSON.stringify(payload))
+      .digest("hex");
+    return expectedSignature === signature;
+  } catch (error) {
+    console.error("Signature verification error:", error);
+    return false;
+  }
 };
 
 // Handle Shiprocket webhook
 exports.handleShipmentWebhook = async (req, res) => {
   try {
+    console.log(
+      "Shiprocket webhook received:",
+      JSON.stringify(req.body, null, 2)
+    );
+
     const signature = req.headers["x-shiprocket-signature"];
     if (!verifyShiprocketSignature(req.body, signature)) {
+      console.error("Invalid Shiprocket webhook signature");
       return res.status(401).json({ message: "Invalid signature" });
     }
 
-    const { order_id, status, awb_code, courier_name } = req.body;
+    const {
+      order_id,
+      awb,
+      current_status,
+      shipment_status,
+      courier_name,
+      etd,
+    } = req.body;
 
-    // Update order status based on Shiprocket status
-    const order = await Order.findOne({ _id: order_id });
+    // Find order by shiprocketOrderId or channel_order_id
+    const order = await Order.findOne({
+      $or: [{ shiprocketOrderId: order_id }, { _id: order_id }],
+    });
+
     if (!order) {
+      console.error("Order not found for Shiprocket webhook:", order_id);
       return res.status(404).json({ message: "Order not found" });
     }
 
+    console.log(
+      `Processing Shiprocket webhook for order ${order._id}, status: ${current_status}`
+    );
+
     // Map Shiprocket status to your order status
     const statusMap = {
-      NEW: "Processing",
-      PICKUP_COMPLETED: "Shipped",
-      IN_TRANSIT: "In Transit",
-      OUT_FOR_DELIVERY: "Out for Delivery",
+      NEW: "Confirmed",
+      "READY TO SHIP": "Packed",
+      "PICKUP SCHEDULED": "Packed",
+      "PICKED UP": "Shipped",
+      "PICKUP EXCEPTION": "Processing",
+      "IN TRANSIT": "In Transit",
+      "OUT FOR DELIVERY": "Out for Delivery",
       DELIVERED: "Delivered",
-      RTO_DELIVERED: "Returned",
+      "RTO INITIATED": "RTO Initiated",
+      "RTO DELIVERED": "RTO Delivered",
       CANCELLED: "Cancelled",
+      LOST: "Delivery Failed",
+      DAMAGED: "Delivery Failed",
     };
 
-    order.status = statusMap[status] || status;
-    order.shippingDetails = {
-      awbCode: awb_code,
-      courierName: courier_name,
-      lastUpdated: new Date(),
-    };
+    const newStatus = statusMap[current_status?.toUpperCase()] || order.status;
+
+    // Only update if status actually changed
+    if (newStatus !== order.status) {
+      order.status = newStatus;
+      order.statusHistory.push({
+        status: newStatus,
+        note: `Updated via Shiprocket: ${current_status}`,
+        timestamp: new Date(),
+      });
+
+      // Update specific timestamps based on status
+      if (newStatus === "Shipped" && !order.shippedAt) {
+        order.shippedAt = new Date();
+      } else if (newStatus === "In Transit" && !order.inTransitAt) {
+        order.inTransitAt = new Date();
+      } else if (newStatus === "Out for Delivery" && !order.outForDeliveryAt) {
+        order.outForDeliveryAt = new Date();
+      } else if (newStatus === "Delivered" && !order.deliveredAt) {
+        order.deliveredAt = new Date();
+        order.canReturn = true;
+        // Set return window (7 days)
+        const returnWindow = new Date();
+        returnWindow.setDate(returnWindow.getDate() + 7);
+        order.returnWindowExpiry = returnWindow;
+
+        // Mark transaction eligible for payout (7 days after delivery)
+        const payoutController = require("./payoutController");
+        await payoutController.makeTransactionEligible(order._id);
+      }
+    }
+
+    // Update tracking information
+    if (awb) order.awbCode = awb;
+    if (courier_name) order.courierName = courier_name;
+    if (etd) order.estimatedDeliveryDate = new Date(etd);
+    if (req.body.track_url) order.trackingUrl = req.body.track_url;
 
     await order.save();
+
+    console.log(
+      `Order ${order._id} updated successfully via Shiprocket webhook`
+    );
     res.status(200).json({ message: "Webhook processed successfully" });
   } catch (error) {
     console.error("Webhook processing error:", error);
@@ -209,40 +289,275 @@ exports.handleShipmentWebhook = async (req, res) => {
   }
 };
 
-// Periodic status check function
-exports.checkShipmentStatus = async (orderId) => {
+// Fetch real-time tracking from Shiprocket (with retry)
+exports.syncShipmentTracking = async (req, res) => {
   try {
-    const token = await authenticateShiprocket();
-    const order = await Order.findById(orderId);
+    const { orderId } = req.params;
+    const { _id: userId } = req.user;
 
-    if (!order || !order.shipmentId) {
-      throw new Error("Order or shipment ID not found");
+    const order = await Order.findOne({
+      _id: orderId,
+      buyer: userId,
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
     }
 
-    const response = await axios.get(
-      `${SHIPROCKET_API_URL}/courier/track/shipment/${order.shipmentId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+    if (!order.shipmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Shipment not yet created",
+      });
+    }
+
+    // Retry logic for Shiprocket API
+    let retries = 3;
+    let lastError;
+
+    while (retries > 0) {
+      try {
+        const token = await authenticateShiprocket();
+        const response = await axios.get(
+          `${SHIPROCKET_API_URL}/courier/track/shipment/${order.shipmentId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 8000,
+          }
+        );
+
+        console.log(
+          "Shiprocket tracking response:",
+          JSON.stringify(response.data, null, 2)
+        );
+
+        const trackingData = response.data.tracking_data;
+        if (trackingData) {
+          const statusMap = {
+            "READY TO SHIP": "Packed",
+            "PICKUP SCHEDULED": "Packed",
+            "PICKED UP": "Shipped",
+            "IN TRANSIT": "In Transit",
+            "OUT FOR DELIVERY": "Out for Delivery",
+            DELIVERED: "Delivered",
+            "RTO INITIATED": "RTO Initiated",
+            "RTO DELIVERED": "RTO Delivered",
+            CANCELLED: "Cancelled",
+          };
+
+          const shiprocketStatus = trackingData.shipment_status_code;
+          const newStatus = statusMap[shiprocketStatus] || order.status;
+
+          if (newStatus !== order.status) {
+            order.status = newStatus;
+            order.statusHistory.push({
+              status: newStatus,
+              note: `Updated from Shiprocket: ${trackingData.shipment_status}`,
+              timestamp: new Date(),
+            });
+
+            // Update timestamps
+            if (newStatus === "Shipped" && !order.shippedAt) {
+              order.shippedAt = new Date();
+            } else if (newStatus === "In Transit" && !order.inTransitAt) {
+              order.inTransitAt = new Date();
+            } else if (
+              newStatus === "Out for Delivery" &&
+              !order.outForDeliveryAt
+            ) {
+              order.outForDeliveryAt = new Date();
+            } else if (newStatus === "Delivered" && !order.deliveredAt) {
+              order.deliveredAt = new Date();
+              order.canReturn = true;
+              const returnWindow = new Date();
+              returnWindow.setDate(returnWindow.getDate() + 7);
+              order.returnWindowExpiry = returnWindow;
+
+              // Mark transaction eligible for payout (7 days after delivery)
+              const payoutController = require("./payoutController");
+              await payoutController.makeTransactionEligible(order._id);
+            }
+          }
+
+          // Update tracking details
+          if (trackingData.awb_code) order.awbCode = trackingData.awb_code;
+          if (trackingData.courier_name)
+            order.courierName = trackingData.courier_name;
+          if (trackingData.edd)
+            order.estimatedDeliveryDate = new Date(trackingData.edd);
+          if (trackingData.track_url)
+            order.trackingUrl = trackingData.track_url;
+
+          await order.save();
+          console.log(`✅ Order ${order._id} tracking synced from Shiprocket`);
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Tracking synced successfully",
+          data: {
+            status: order.status,
+            trackingData: trackingData,
+          },
+        });
+      } catch (error) {
+        lastError = error;
+        retries--;
+        if (retries > 0) {
+          console.log(
+            `Shiprocket sync failed, retrying... (${retries} attempts left)`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1s before retry
+        }
       }
-    );
-
-    const { tracking_data } = response.data;
-    if (tracking_data) {
-      order.shippingDetails = {
-        ...order.shippingDetails,
-        currentStatus: tracking_data.status,
-        trackingHistory: tracking_data.track_history,
-        lastUpdated: new Date(),
-      };
-      await order.save();
     }
 
-    return tracking_data;
+    // All retries failed
+    throw lastError;
   } catch (error) {
-    console.error("Error checking shipment status:", error);
+    console.error("Error syncing shipment tracking:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to sync tracking from Shiprocket",
+      error: error.message,
+    });
+  }
+};
+
+// Background job to sync all active shipments
+exports.syncAllActiveShipments = async () => {
+  try {
+    console.log("Starting background sync of active shipments...");
+
+    // Find all orders with active shipments
+    const activeOrders = await Order.find({
+      shipmentId: { $exists: true, $ne: null },
+      status: {
+        $in: [
+          "Confirmed",
+          "Processing",
+          "Packed",
+          "Shipped",
+          "In Transit",
+          "Out for Delivery",
+        ],
+      },
+    });
+
+    console.log(`Found ${activeOrders.length} active shipments to sync`);
+
+    const token = await authenticateShiprocket();
+    let syncedCount = 0;
+
+    for (const order of activeOrders) {
+      try {
+        console.log(
+          `Syncing shipment ${order.shipmentId} for order ${order._id}...`
+        );
+
+        const response = await axios.get(
+          `${SHIPROCKET_API_URL}/courier/track/shipment/${order.shipmentId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        console.log(
+          `Shiprocket response for ${order.shipmentId}:`,
+          JSON.stringify(response.data, null, 2)
+        );
+
+        const trackingData = response.data.tracking_data;
+        if (trackingData) {
+          const statusMap = {
+            "READY TO SHIP": "Packed",
+            "PICKUP SCHEDULED": "Packed",
+            "PICKED UP": "Shipped",
+            "IN TRANSIT": "In Transit",
+            "OUT FOR DELIVERY": "Out for Delivery",
+            DELIVERED: "Delivered",
+          };
+
+          const shiprocketStatus = trackingData.shipment_status_code;
+          const newStatus = statusMap[shiprocketStatus] || order.status;
+
+          console.log(
+            `Order ${order._id}: Current status="${order.status}", Shiprocket status="${shiprocketStatus}", New status="${newStatus}"`
+          );
+
+          if (newStatus !== order.status) {
+            console.log(
+              `Updating order ${order._id} from ${order.status} to ${newStatus}`
+            );
+            order.status = newStatus;
+            order.statusHistory.push({
+              status: newStatus,
+              note: `Auto-synced from Shiprocket: ${trackingData.shipment_status}`,
+              timestamp: new Date(),
+            });
+
+            // Update timestamps
+            if (newStatus === "Shipped" && !order.shippedAt)
+              order.shippedAt = new Date();
+            if (newStatus === "In Transit" && !order.inTransitAt)
+              order.inTransitAt = new Date();
+            if (newStatus === "Out for Delivery" && !order.outForDeliveryAt)
+              order.outForDeliveryAt = new Date();
+            if (newStatus === "Delivered" && !order.deliveredAt) {
+              order.deliveredAt = new Date();
+              order.canReturn = true;
+              const returnWindow = new Date();
+              returnWindow.setDate(returnWindow.getDate() + 7);
+              order.returnWindowExpiry = returnWindow;
+            }
+
+            // Update tracking info
+            if (trackingData.awb_code && !order.awbCode)
+              order.awbCode = trackingData.awb_code;
+            if (trackingData.courier_name && !order.courierName)
+              order.courierName = trackingData.courier_name;
+            if (trackingData.track_url && !order.trackingUrl)
+              order.trackingUrl = trackingData.track_url;
+            if (trackingData.edd && !order.estimatedDeliveryDate)
+              order.estimatedDeliveryDate = new Date(trackingData.edd);
+
+            await order.save();
+            syncedCount++;
+            console.log(`✅ Order ${order._id} updated successfully`);
+          } else {
+            console.log(`No status change for order ${order._id}`);
+          }
+        } else {
+          console.log(
+            `No tracking data received for shipment ${order.shipmentId}`
+          );
+        }
+
+        // Small delay to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      } catch (error) {
+        console.error(
+          `❌ Error syncing shipment ${order.shipmentId}:`,
+          error.response?.data || error.message
+        );
+      }
+    }
+
+    console.log(
+      `Background sync completed: ${syncedCount}/${activeOrders.length} orders updated`
+    );
+    return { synced: syncedCount, total: activeOrders.length };
+  } catch (error) {
+    console.error("Error in background shipment sync:", error);
     throw error;
   }
 };

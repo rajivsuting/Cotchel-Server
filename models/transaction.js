@@ -46,6 +46,24 @@ const transactionSchema = new mongoose.Schema({
     email: String,
     contact: String,
   },
+
+  // Payout tracking
+  payoutStatus: {
+    type: String,
+    enum: ["Pending", "Eligible", "Processing", "Completed", "Failed"],
+    default: "Pending",
+  },
+  payoutEligibleDate: Date, // When eligible for payout (deliveredAt + 7 days)
+  payoutDate: Date, // When payout was actually made
+  payoutBatchId: String, // For tracking bulk payouts
+  payoutReferenceNumber: String, // Bank transfer reference
+  payoutMethod: {
+    type: String,
+    enum: ["Manual", "Razorpay", "Bank Transfer"],
+    default: "Manual",
+  },
+  payoutNotes: String, // Admin notes
+
   createdAt: {
     type: Date,
     default: Date.now,

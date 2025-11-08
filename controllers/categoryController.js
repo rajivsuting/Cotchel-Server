@@ -17,6 +17,10 @@ exports.createCategory = async (req, res) => {
     const category = new Category({ name });
     await category.save();
 
+    // Invalidate category caches
+    const cache = require("../services/upstashCache");
+    await cache.CacheInvalidation.onCategoryUpdate();
+
     return res
       .status(201)
       .json({ message: "Category created successfully", data: category });
@@ -44,6 +48,20 @@ exports.getCategories = async (req, res) => {
       status,
       subCategories,
     } = req.query;
+
+    // Generate cache key based on query parameters
+    const cacheKey = `categories:list:page:${page}:limit:${limit}:search:${search || 'none'}:status:${status || 'all'}:sort:${sortBy}:${order}`;
+
+    // Try cache first (Upstash Redis)
+    const cache = require("../services/upstashCache");
+    const cachedData = await cache.get(cacheKey);
+    
+    if (cachedData) {
+      console.log(`💾 [CACHE HIT] Categories: ${cacheKey}`);
+      return res.status(200).json(cachedData);
+    }
+
+    console.log(`🔍 [CACHE MISS] Categories: ${cacheKey}`);
 
     const filter = {};
 
@@ -83,7 +101,7 @@ exports.getCategories = async (req, res) => {
       Category.countDocuments(filter),
     ]);
 
-    return res.status(200).json({
+    const responseData = {
       success: true,
       message: "Categories retrieved successfully",
       data: categories,
@@ -93,7 +111,12 @@ exports.getCategories = async (req, res) => {
         totalPages: Math.ceil(totalCategories / pageSize),
         pageSize,
       },
-    });
+    };
+
+    // Cache for 1 hour (categories rarely change)
+    await cache.set(cacheKey, responseData, 3600);
+
+    return res.status(200).json(responseData);
   } catch (error) {
     console.error("Error fetching categories:", error);
     return res.status(500).json({
@@ -123,6 +146,10 @@ exports.updateCategory = async (req, res) => {
 
     category.name = name;
     await category.save();
+
+    // Invalidate category caches
+    const cache = require("../services/upstashCache");
+    await cache.CacheInvalidation.onCategoryUpdate(id);
 
     return res
       .status(200)
@@ -155,6 +182,11 @@ exports.deleteCategory = async (req, res) => {
     }
 
     await category.deleteWithSubCategories();
+
+    // Invalidate category caches
+    const cache = require("../services/upstashCache");
+    await cache.CacheInvalidation.onCategoryUpdate(id);
+
     return res
       .status(200)
       .json({ message: "Category and its subcategories deleted successfully" });

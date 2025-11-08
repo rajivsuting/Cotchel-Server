@@ -28,16 +28,14 @@ exports.getEarningsStats = async (req, res) => {
       },
     ]);
 
-    // Get pending payout (earnings from last 7 days)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
+    // Get pending payout (transactions eligible for payout but not yet paid)
+    // This includes transactions with payoutStatus: "Eligible" (delivered 7+ days ago)
     const pendingPayout = await Transaction.aggregate([
       {
         $match: {
           seller: sellerObjectId,
           status: "Completed",
-          completedAt: { $gte: sevenDaysAgo },
+          payoutStatus: { $in: ["Pending", "Eligible"] }, // Not yet paid out
         },
       },
       {
@@ -48,12 +46,57 @@ exports.getEarningsStats = async (req, res) => {
       },
     ]);
 
-    // Get last payout (most recent completed transaction)
-    const lastPayout = await Transaction.findOne({
+    // Get last payout (most recent payout batch that was actually paid out)
+    // This is based on payoutStatus: "Completed" (admin marked as paid after manual transfer)
+    const lastPayoutTransaction = await Transaction.findOne({
       seller: sellerObjectId,
       status: "Completed",
-    }).sort({ completedAt: -1 });
-    console.log("4. Last payout found:", lastPayout);
+      payoutStatus: "Completed", // Actually paid out
+      payoutDate: { $exists: true }, // Has payout date
+    }).sort({ payoutDate: -1 });
+
+    // If there's a last payout, get the total amount of that payout batch
+    let lastPayout = null;
+    if (lastPayoutTransaction) {
+      // Match by batchId if available, otherwise by payoutDate (for same seller)
+      const matchCriteria = lastPayoutTransaction.payoutBatchId
+        ? {
+            seller: sellerObjectId,
+            status: "Completed",
+            payoutStatus: "Completed",
+            payoutBatchId: lastPayoutTransaction.payoutBatchId,
+          }
+        : {
+            seller: sellerObjectId,
+            status: "Completed",
+            payoutStatus: "Completed",
+            payoutDate: lastPayoutTransaction.payoutDate,
+          };
+
+      const lastPayoutBatch = await Transaction.aggregate([
+        {
+          $match: matchCriteria,
+        },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: "$sellerAmount" },
+            payoutDate: { $first: "$payoutDate" },
+            referenceNumber: { $first: "$payoutReferenceNumber" },
+            batchId: { $first: "$payoutBatchId" },
+          },
+        },
+      ]);
+
+      if (lastPayoutBatch.length > 0) {
+        lastPayout = {
+          amount: lastPayoutBatch[0].totalAmount,
+          date: lastPayoutBatch[0].payoutDate,
+          referenceNumber: lastPayoutBatch[0].referenceNumber,
+          batchId: lastPayoutBatch[0].batchId,
+        };
+      }
+    }
 
     // Get active orders count (pending transactions)
     const activeOrders = await Transaction.countDocuments({
@@ -127,12 +170,7 @@ exports.getEarningsStats = async (req, res) => {
     const responseData = {
       totalEarnings: totalEarnings[0]?.total || 0,
       pendingPayout: pendingPayout[0]?.total || 0,
-      lastPayout: lastPayout
-        ? {
-            amount: lastPayout.sellerAmount,
-            date: lastPayout.completedAt,
-          }
-        : null,
+      lastPayout: lastPayout, // Already formatted with amount, date, referenceNumber, batchId
       activeOrders,
       growthPercentage: Math.round(growthPercentage * 100) / 100,
       nextPayoutDate,

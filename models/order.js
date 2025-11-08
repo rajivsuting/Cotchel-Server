@@ -36,6 +36,13 @@ const orderSchema = new mongoose.Schema({
     ref: "User",
   },
   totalPrice: Number,
+  shippingFee: { type: Number, default: 0 },
+  subtotal: Number, // Product total before shipping
+  grandTotal: Number, // Total including shipping
+
+  // Pickup scheduling
+  scheduledPickupDate: Date,
+  pickupTime: String, // e.g., "10:00 AM"
 
   // Main order status
   status: {

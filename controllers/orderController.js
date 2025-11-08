@@ -18,7 +18,10 @@ const OrderEmailService = require("../services/orderEmailService");
 
 const SHIPROCKET_API_URL = "https://apiv2.shiprocket.in/v1/external";
 
-async function createShiprocketShipment(order) {
+// Export for use in shipping controller
+exports.createShiprocketShipment = async function createShiprocketShipment(
+  order
+) {
   try {
     console.log("=== Starting Shiprocket Shipment Creation ===");
     console.log("Order ID:", order._id);
@@ -81,6 +84,32 @@ async function createShiprocketShipment(order) {
       },
     });
 
+    // CRITICAL: Calculate total weight for ALL products (not just first)
+    let totalWeight = 0;
+    let maxLength = 0;
+    let maxBreadth = 0;
+    let maxHeight = 0;
+
+    for (const item of order.products) {
+      const product = await Product.findById(item.product);
+      if (!product) {
+        throw new Error(`Product ${item.product} not found in order`);
+      }
+      // Sum weight of all items (weight × quantity)
+      totalWeight += product.weight * item.quantity;
+      // Track maximum dimensions for package size
+      maxLength = Math.max(maxLength, product.length);
+      maxBreadth = Math.max(maxBreadth, product.breadth);
+      maxHeight = Math.max(maxHeight, product.height);
+    }
+
+    console.log("📦 Calculated shipping package:", {
+      totalWeight: `${totalWeight}kg`,
+      dimensions: `${maxLength}×${maxBreadth}×${maxHeight}cm`,
+      productCount: order.products.length,
+      totalItems: order.products.reduce((sum, item) => sum + item.quantity, 0),
+    });
+
     // First, get available pickup locations
     console.log("Fetching pickup locations from Shiprocket...");
     const pickupLocationsResponse = await axios.get(
@@ -106,8 +135,15 @@ async function createShiprocketShipment(order) {
     // Use the first shipping address as pickup location
     const shippingAddress =
       pickupLocationsResponse.data.data.shipping_address[0];
-    const pickupLocation = `${shippingAddress.address}, ${shippingAddress.city}, ${shippingAddress.state} - ${shippingAddress.pincode}`;
+    const pickupLocation = shippingAddress.pickup_location;
     console.log("✅ Selected Pickup Location:", pickupLocation);
+    console.log("✅ Pickup Location Details:", {
+      name: shippingAddress.pickup_location,
+      address: `${shippingAddress.address}, ${shippingAddress.address_2}`,
+      city: shippingAddress.city,
+      state: shippingAddress.state,
+      pincode: shippingAddress.pin_code,
+    });
 
     const shipmentData = {
       order_id: order._id.toString(),
@@ -129,21 +165,24 @@ async function createShiprocketShipment(order) {
       order_items: await Promise.all(
         order.products.map(async (item) => {
           const product = await Product.findById(item.product);
+          if (!product) {
+            throw new Error(`Product ${item.product} not found`);
+          }
           return {
             name: product.title,
-            sku: product.sku || "SKU001",
+            sku: product.sku,
             units: item.quantity,
             selling_price: item.price,
-            hsn: 8471,
+            hsn: 8471, // Default HSN for electronics (can be made dynamic later)
           };
         })
       ),
       payment_method: "Prepaid",
       sub_total: order.totalPrice,
-      length: firstProduct.length || 10,
-      breadth: firstProduct.breadth || 10,
-      height: firstProduct.height || 10,
-      weight: firstProduct.weight || 0.5,
+      length: maxLength,
+      breadth: maxBreadth,
+      height: maxHeight,
+      weight: totalWeight,
     };
 
     console.log(
@@ -183,6 +222,283 @@ async function createShiprocketShipment(order) {
       shiprocketOrderId: order.shiprocketOrderId,
     });
 
+    // Step 2: Assign courier in background (non-blocking for faster checkout)
+    setImmediate(async () => {
+      try {
+        console.log(
+          `[Background] Assigning courier for shipment ${order.shipmentId}...`
+        );
+        const serviceabilityResponse = await axios.get(
+          `${SHIPROCKET_API_URL}/courier/serviceability`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            params: {
+              pickup_postcode: shippingAddress.pin_code,
+              delivery_postcode: order.address.pincode,
+              weight: totalWeight,
+              cod: 0,
+            },
+            timeout: 10000, // 10 second timeout
+          }
+        );
+
+        const couriers =
+          serviceabilityResponse.data?.data?.available_courier_companies || [];
+        if (couriers.length > 0) {
+          const bestCourier = couriers.sort(
+            (a, b) => a.freight_charge - b.freight_charge
+          )[0];
+          console.log(
+            `[Background] Selected courier: ${bestCourier.courier_name} - ₹${bestCourier.freight_charge}`
+          );
+
+          const awbResponse = await axios.post(
+            `${SHIPROCKET_API_URL}/courier/assign/awb`,
+            {
+              shipment_id: order.shipmentId,
+              courier_id: bestCourier.courier_company_id,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              timeout: 10000,
+            }
+          );
+
+          console.log(
+            "[Background] AWB Response:",
+            JSON.stringify(awbResponse.data, null, 2)
+          );
+
+          // Check for Shiprocket wallet balance error
+          if (
+            awbResponse.data?.status_code === 350 ||
+            awbResponse.data?.message?.includes("recharge") ||
+            awbResponse.data?.response?.data?.awb_assign_error?.includes(
+              "recharge"
+            )
+          ) {
+            console.error("❌ [CRITICAL] SHIPROCKET WALLET BALANCE LOW!");
+            console.error("❌ Message:", awbResponse.data.message);
+
+            // Alert ADMIN (not seller) about wallet issue
+            const AdminAlertService = require("../services/adminAlertService");
+            const orderToUpdate = await Order.findById(order._id);
+
+            if (orderToUpdate) {
+              const seller = await User.findById(orderToUpdate.seller)
+                .select("fullName sellerDetails")
+                .populate("sellerDetails");
+              const sellerName =
+                seller?.sellerDetails?.businessName ||
+                seller?.fullName ||
+                "Unknown Seller";
+
+              // Send critical alert to admin
+              await AdminAlertService.alertShiprocketWalletLow(
+                orderToUpdate._id.toString(),
+                sellerName
+              );
+            }
+
+            throw new Error(
+              "Platform shipping configuration issue. Our team has been notified and will resolve this shortly."
+            );
+          }
+
+          // Handle different Shiprocket AWB response structures
+          let awbCode = null;
+          let trackingUrl = null;
+          let edd = null;
+
+          // Try different response structures from Shiprocket
+          if (
+            awbResponse.data?.awb_assign_status === 1 ||
+            awbResponse.data?.success === true
+          ) {
+            // Common structure 1: Direct in response
+            const responseData =
+              awbResponse.data.response?.data || awbResponse.data;
+            awbCode =
+              responseData.awb_code ||
+              responseData.awb ||
+              responseData.awb_number;
+            trackingUrl =
+              responseData.label_url ||
+              responseData.manifest_url ||
+              responseData.tracking_url;
+            edd = responseData.edd || responseData.estimated_delivery_date;
+          } else if (awbResponse.data?.response?.data) {
+            // Common structure 2: Nested in response.data
+            const nestedData = awbResponse.data.response.data;
+            awbCode =
+              nestedData.awb_code || nestedData.awb || nestedData.awb_number;
+            trackingUrl = nestedData.label_url || nestedData.manifest_url;
+            edd = nestedData.edd;
+          } else if (awbResponse.data?.awb_data) {
+            // Common structure 3: In awb_data
+            awbCode = awbResponse.data.awb_data.awb_code;
+            trackingUrl = awbResponse.data.awb_data.label_url;
+          }
+
+          console.log("[Background] Extracted AWB:", {
+            awbCode,
+            trackingUrl,
+            edd,
+            rawStructure: Object.keys(awbResponse.data),
+          });
+
+          if (awbCode && awbCode !== "TEMP") {
+            const orderToUpdate = await Order.findById(order._id);
+            if (orderToUpdate) {
+              orderToUpdate.awbCode = awbCode;
+              orderToUpdate.courierName = bestCourier.courier_name;
+              orderToUpdate.trackingUrl = trackingUrl;
+              orderToUpdate.estimatedDeliveryDate = edd ? new Date(edd) : null;
+
+              // Auto-transition to "Packed" once AWB is assigned (ready for pickup)
+              if (
+                orderToUpdate.status === "Confirmed" ||
+                orderToUpdate.status === "Processing"
+              ) {
+                orderToUpdate.status = "Packed";
+                orderToUpdate.packedAt = new Date();
+                orderToUpdate.statusHistory.push({
+                  status: "Packed",
+                  note: "Order ready for pickup - Courier assigned and pickup scheduled",
+                  timestamp: new Date(),
+                });
+                console.log(
+                  `✅ [Auto] Order ${orderToUpdate._id} auto-transitioned to Packed`
+                );
+              }
+
+              await orderToUpdate.save();
+              console.log(
+                `✅ [Background] Courier assigned: ${orderToUpdate.courierName}, AWB: ${orderToUpdate.awbCode}`
+              );
+
+              // Emit real-time order update
+              const { notifyOrderUpdate } = require("../utils/emitOrderUpdate");
+              await notifyOrderUpdate(orderToUpdate);
+
+              // Notify seller that courier is assigned and order is ready for pickup
+              const NotificationService = require("../services/notificationService");
+              await NotificationService.createNotification({
+                type: "courier_assigned",
+                sellerId: orderToUpdate.seller,
+                orderId: orderToUpdate._id,
+                message: `🚚 Courier assigned: ${orderToUpdate.courierName}. AWB: ${orderToUpdate.awbCode}. Pack your order - Pickup will be scheduled automatically.`,
+              });
+
+              // Schedule pickup automatically (1 day from now by default)
+              try {
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                tomorrow.setHours(10, 0, 0, 0); // 10 AM tomorrow
+
+                const pickupResponse = await axios.post(
+                  `${SHIPROCKET_API_URL}/courier/generate/pickup`,
+                  {
+                    shipment_id: [orderToUpdate.shipmentId],
+                    pickup_date: tomorrow.toISOString().split("T")[0],
+                  },
+                  {
+                    headers: {
+                      Authorization: `Bearer ${token}`,
+                      "Content-Type": "application/json",
+                    },
+                    timeout: 10000,
+                  }
+                );
+
+                // Save pickup date to order
+                orderToUpdate.scheduledPickupDate = tomorrow;
+                orderToUpdate.pickupTime = "10:00 AM";
+                await orderToUpdate.save();
+
+                // Emit real-time order update
+                const {
+                  notifyOrderUpdate,
+                } = require("../utils/emitOrderUpdate");
+                await notifyOrderUpdate(orderToUpdate);
+
+                // Update notification with pickup details
+                await NotificationService.createNotification({
+                  type: "pickup_scheduled",
+                  sellerId: orderToUpdate.seller,
+                  orderId: orderToUpdate._id,
+                  message: `📅 Pickup scheduled: ${tomorrow.toLocaleDateString(
+                    "en-US",
+                    { weekday: "long", month: "short", day: "numeric" }
+                  )} at 10:00 AM. Courier: ${
+                    orderToUpdate.courierName
+                  }. Keep your packed order ready!`,
+                });
+
+                console.log(
+                  `✅ [Auto] Pickup scheduled for ${tomorrow.toDateString()} at 10:00 AM`
+                );
+              } catch (pickupError) {
+                console.log(
+                  `⚠️ [Auto] Pickup scheduling failed (seller can schedule manually):`,
+                  pickupError.response?.data?.message || pickupError.message
+                );
+              }
+            }
+          } else {
+            console.warn(
+              `⚠️ [Background] Failed to extract AWB code from Shiprocket response`
+            );
+            console.warn(
+              `⚠️ Shiprocket may still have assigned AWB. Check Shiprocket dashboard for shipment ${order.shipmentId}`
+            );
+
+            // Still update order with courier info even without AWB
+            const orderToUpdate = await Order.findById(order._id);
+            if (orderToUpdate) {
+              orderToUpdate.courierName = bestCourier.courier_name;
+              orderToUpdate.status = "Packed";
+              orderToUpdate.packedAt = new Date();
+              orderToUpdate.statusHistory.push({
+                status: "Packed",
+                note: `Courier assigned: ${bestCourier.courier_name}. Check Shiprocket dashboard for AWB code.`,
+                timestamp: new Date(),
+              });
+              await orderToUpdate.save();
+
+              // Emit real-time order update
+              const { notifyOrderUpdate } = require("../utils/emitOrderUpdate");
+              await notifyOrderUpdate(orderToUpdate);
+
+              // Notify seller to check Shiprocket dashboard
+              await NotificationService.createNotification({
+                type: "courier_assigned",
+                sellerId: orderToUpdate.seller,
+                orderId: orderToUpdate._id,
+                message: `🚚 Courier assigned: ${orderToUpdate.courierName}. Please check Shiprocket dashboard for AWB code and tracking details.`,
+              });
+            }
+          }
+        } else {
+          console.warn(
+            `⚠️ [Background] No couriers available for shipment ${order.shipmentId}`
+          );
+        }
+      } catch (courierError) {
+        console.error(
+          `❌ [Background] Courier assignment failed for ${order.shipmentId}:`,
+          courierError.response?.data || courierError.message
+        );
+        // Courier can be assigned later via background sync
+      }
+    });
+
     console.log("=== Shiprocket Shipment Creation Completed Successfully ===");
     return response.data;
   } catch (error) {
@@ -199,7 +515,7 @@ async function createShiprocketShipment(order) {
       }`
     );
   }
-}
+};
 
 // Helper function to update order status
 async function updateOrderStatus(orderId, status, note) {
@@ -318,9 +634,16 @@ async function createSellerOrder(
   address,
   razorpayOrder,
   session,
-  cartId
+  cartId,
+  shippingFee = 0
 ) {
   try {
+    const subtotal = items.reduce(
+      (sum, item) =>
+        sum + item.quantity * item.productId.lotSize * item.productId.price,
+      0
+    );
+
     const order = new Order({
       products: items.map((item) => ({
         product: item.productId._id,
@@ -332,12 +655,11 @@ async function createSellerOrder(
       })),
       buyer: buyer._id,
       seller: sellerId,
-      cartId: cartId, // Add cartId to track which cart this order came from
-      totalPrice: items.reduce(
-        (sum, item) =>
-          sum + item.quantity * item.productId.lotSize * item.productId.price,
-        0
-      ),
+      cartId: cartId,
+      subtotal: subtotal,
+      shippingFee: shippingFee,
+      totalPrice: subtotal, // Keep for backward compatibility
+      grandTotal: subtotal + shippingFee,
       status: "Payment Pending",
       paymentStatus: "Pending",
       paymentTransactionId: razorpayOrder.id,
@@ -359,8 +681,6 @@ async function createSellerOrder(
     });
 
     await order.save({ session });
-
-    // Remove notification creation from here - it will be created after payment confirmation
     return order;
   } catch (error) {
     throw new OrderError("Failed to create order", 500, {
@@ -532,12 +852,14 @@ exports.createOrderFromCart = async (req, res) => {
 
   try {
     console.log("=== Starting Order Creation Process ===");
-    const { addressId } = req.body;
+    const { addressId, shippingFee = 0 } = req.body;
     const { _id: userId } = req.user;
 
     if (!addressId) {
       throw new OrderError("Shipping address is required", 400);
     }
+
+    console.log("Checkout details:", { addressId, shippingFee });
 
     console.log("Fetching required data...");
     const [shippingAddress, cart, buyer] = await Promise.all([
@@ -596,17 +918,22 @@ exports.createOrderFromCart = async (req, res) => {
       "sellers"
     );
 
-    const totalPrice = cart.items.reduce(
+    const subtotal = cart.items.reduce(
       (sum, item) =>
         sum + item.quantity * item.productId.lotSize * item.productId.price,
       0
     );
+    const grandTotal = subtotal + shippingFee;
 
     console.log("Creating Razorpay payment order...");
+    console.log(
+      `Subtotal: ₹${subtotal}, Shipping: ₹${shippingFee}, Grand Total: ₹${grandTotal}`
+    );
+
     let razorpayOrder;
     try {
       razorpayOrder = await paymentService.createPaymentOrder({
-        totalPrice,
+        totalPrice: grandTotal, // Include shipping fee in payment
         buyerId: buyer._id,
       });
       console.log("Razorpay order created:", razorpayOrder.id);
@@ -622,6 +949,15 @@ exports.createOrderFromCart = async (req, res) => {
     console.log("Creating orders for each seller...");
     for (const [sellerId, items] of Object.entries(sellerOrders)) {
       console.log(`Creating order for seller ${sellerId}...`);
+
+      // Calculate shipping fee per seller (proportional to their items)
+      const sellerSubtotal = items.reduce(
+        (sum, item) =>
+          sum + item.quantity * item.productId.lotSize * item.productId.price,
+        0
+      );
+      const sellerShippingFee = (sellerSubtotal / subtotal) * shippingFee;
+
       const order = await createSellerOrder(
         sellerId,
         items,
@@ -629,28 +965,14 @@ exports.createOrderFromCart = async (req, res) => {
         shippingAddress,
         razorpayOrder,
         session,
-        cart._id
+        cart._id,
+        sellerShippingFee
       );
       createdOrders.push(order);
       console.log(`Order created for seller ${sellerId}:`, order._id);
 
-      try {
-        console.log(
-          `Attempting to create Shiprocket shipment for order ${order._id}...`
-        );
-        const shiprocketResponse = await createShiprocketShipment(order);
-        console.log(
-          "Shiprocket shipment created successfully:",
-          shiprocketResponse
-        );
-        await updateOrderStatus(order._id, "Shipped", "Shipment created");
-      } catch (error) {
-        console.error(
-          `Failed to create Shiprocket shipment for order ${order._id}:`,
-          error.message
-        );
-        // Continue with order creation even if shipping fails
-      }
+      // Note: Shiprocket shipment will be created by SELLER when they're ready to ship
+      // This gives sellers control and speeds up checkout
     }
 
     // Don't clear the cart here - it will be cleared after successful payment
@@ -951,8 +1273,9 @@ exports.verifyPayment = async (req, res) => {
         order.razorpayPaymentId = payment_id;
         order.razorpayOrderId = order_id;
         order.razorpaySignature = signature;
-        order.status = "Confirmed";
+        order.status = "Processing"; // Directly mark as Processing (skip Confirmed)
         order.confirmedAt = new Date();
+        order.processingAt = new Date();
         order.platformFee = platformFee;
         order.platformFeePercentage = platformFeePercentage;
         order.sellerEarnings = sellerAmount;
@@ -962,6 +1285,12 @@ exports.verifyPayment = async (req, res) => {
         order.statusHistory.push({
           status: "Confirmed",
           note: "Payment verified successfully, stock deducted, order confirmed",
+          timestamp: new Date(),
+        });
+        order.statusHistory.push({
+          status: "Processing",
+          note: "Order is being prepared by seller",
+          timestamp: new Date(),
         });
         await order.save({ session });
 
@@ -974,6 +1303,30 @@ exports.verifyPayment = async (req, res) => {
         );
       })
     );
+
+    // Auto-transition to "Processing" after 10 seconds (gives time for courier assignment)
+    setTimeout(async () => {
+      try {
+        for (const order of orders) {
+          const orderToUpdate = await Order.findById(order._id);
+          if (orderToUpdate && orderToUpdate.status === "Confirmed") {
+            orderToUpdate.status = "Processing";
+            orderToUpdate.processingAt = new Date();
+            orderToUpdate.statusHistory.push({
+              status: "Processing",
+              note: "Automatically started processing - preparing order for shipment",
+              timestamp: new Date(),
+            });
+            await orderToUpdate.save();
+            console.log(
+              `✅ [Auto] Order ${orderToUpdate._id} auto-transitioned to Processing`
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Error auto-transitioning to Processing:", error);
+      }
+    }, 10000); // 10 seconds after payment
 
     // Delete the cart if all orders are paid
     if (orders[0].cartId) {
@@ -1164,24 +1517,8 @@ exports.createOrderFromBuyNow = async (req, res) => {
     order.paymentTransactionId = razorpayOrder.id;
     await order.save({ session });
 
-    // Create Shiprocket shipment for buy now order
-    try {
-      console.log(
-        `Attempting to create Shiprocket shipment for buy now order ${order._id}...`
-      );
-      const shiprocketResponse = await createShiprocketShipment(order);
-      console.log(
-        "Shiprocket shipment created successfully:",
-        shiprocketResponse
-      );
-      await updateOrderStatus(order._id, "Shipped", "Shipment created");
-    } catch (error) {
-      console.error(
-        `Failed to create Shiprocket shipment for buy now order ${order._id}:`,
-        error.message
-      );
-      // Continue with order creation even if shipping fails
-    }
+    // Note: Shiprocket shipment will be created by SELLER when they're ready to ship
+    // This gives sellers control and speeds up checkout
 
     // Respond with the created order details
     res.status(201).json({
@@ -1251,7 +1588,7 @@ exports.getAllOrders = async (req, res) => {
           model: "Product",
           select: "title images featuredImage",
         })
-        .populate("buyer", "fullName")
+        .populate("buyer", "fullName phone email")
         .populate({
           path: "seller",
           select: "fullName email sellerDetails",
@@ -1290,11 +1627,19 @@ exports.getAllOrders = async (req, res) => {
     const formattedOrders = orders.map((order) => ({
       orderId: order._id,
       buyer: order.buyer?.fullName || "Unknown Buyer",
+      buyerName: order.buyer?.fullName || "Unknown Buyer",
+      buyerPhone: order.buyer?.phone || order.address?.phone || "N/A",
+      buyerEmail: order.buyer?.email || "N/A",
       seller: formatSellerInfo(order.seller),
       totalPrice: order.totalPrice,
       paymentStatus: order.paymentStatus,
       status: order.status,
       createdAt: order.createdAt,
+      // Shipping info for seller dashboard
+      awbCode: order.awbCode,
+      courierName: order.courierName,
+      scheduledPickupDate: order.scheduledPickupDate,
+      pickupTime: order.pickupTime,
       address: order.address
         ? {
             street: order.address.street || "",
@@ -1320,6 +1665,12 @@ exports.getAllOrders = async (req, res) => {
           userRating: userRatings.get(product._id?.toString()) || null,
         };
       }),
+      // Tracking information
+      statusHistory: order.statusHistory || [],
+      trackingUrl: order.trackingUrl,
+      awbCode: order.awbCode,
+      courierName: order.courierName,
+      estimatedDeliveryDate: order.estimatedDeliveryDate,
     }));
 
     res.status(200).json({
@@ -1387,7 +1738,10 @@ exports.getOrderById = async (req, res) => {
         phone: order.buyer?.phone,
       },
       seller: formatSellerInfo(order.seller),
-      totalPrice: order.totalPrice,
+      subtotal: order.subtotal || order.totalPrice,
+      shippingFee: order.shippingFee || 0,
+      grandTotal: order.grandTotal || order.totalPrice,
+      totalPrice: order.totalPrice, // Kept for backward compatibility
       paymentStatus: order.paymentStatus,
       paymentTransactionId: order.paymentTransactionId,
       status: order.status,
@@ -1424,6 +1778,29 @@ exports.getOrderById = async (req, res) => {
           totalPrice: productItem.totalPrice,
         };
       }),
+      // Tracking information
+      statusHistory: order.statusHistory || [],
+      trackingUrl: order.trackingUrl,
+      awbCode: order.awbCode,
+      courierName: order.courierName,
+      estimatedDeliveryDate: order.estimatedDeliveryDate,
+      shipmentId: order.shipmentId,
+      shiprocketOrderId: order.shiprocketOrderId,
+      // Pickup information
+      scheduledPickupDate: order.scheduledPickupDate,
+      pickupTime: order.pickupTime,
+      // Cancellation information
+      cancellationReason: order.cancellationReason,
+      cancelledAt: order.cancelledAt,
+      // Timestamps
+      confirmedAt: order.confirmedAt,
+      processingAt: order.processingAt,
+      packedAt: order.packedAt,
+      shippedAt: order.shippedAt,
+      inTransitAt: order.inTransitAt,
+      outForDeliveryAt: order.outForDeliveryAt,
+      deliveredAt: order.deliveredAt,
+      completedAt: order.completedAt,
     };
 
     res.status(200).json({
@@ -1743,7 +2120,10 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
         phone: order.buyer?.phone,
       },
       seller: formatSellerInfo(order.seller),
-      totalPrice: order.totalPrice,
+      subtotal: order.subtotal || order.totalPrice,
+      shippingFee: order.shippingFee || 0,
+      grandTotal: order.grandTotal || order.totalPrice,
+      totalPrice: order.totalPrice, // Kept for backward compatibility
       paymentStatus: order.paymentStatus,
       paymentTransactionId: order.paymentTransactionId,
       status: order.status,
@@ -1783,6 +2163,12 @@ exports.getOrdersByPaymentTransactionId = async (req, res) => {
           totalPrice: productItem.totalPrice,
         };
       }),
+      // Tracking information
+      statusHistory: order.statusHistory || [],
+      trackingUrl: order.trackingUrl,
+      awbCode: order.awbCode,
+      courierName: order.courierName,
+      estimatedDeliveryDate: order.estimatedDeliveryDate,
     }));
 
     // Calculate total amount across all orders

@@ -12,6 +12,8 @@ const notificationSchema = new mongoose.Schema({
       "account_verification",
       "seller_registered",
       "order_placed",
+      "courier_assigned",
+      "pickup_scheduled",
       "error",
     ],
     required: true,

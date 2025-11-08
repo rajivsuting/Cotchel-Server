@@ -120,6 +120,8 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const sellerDashboardRoutes = require("./routes/sellerDashboardRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const monitoringRoutes = require("./routes/monitoringRoutes");
+const cacheRoutes = require("./routes/cacheRoutes");
+const payoutRoutes = require("./routes/payoutRoutes");
 const testRoutes = require("./routes/testRoutes");
 
 // Import middleware and utilities
@@ -174,6 +176,8 @@ app.use("/api/subcategories", subCategoryRoutes);
 app.use("/api/order-temp", tempOrderRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/monitoring", monitoringRoutes);
+app.use("/api/cache", cacheRoutes);
+app.use("/api/payouts", payoutRoutes);
 app.use("/api/test", testRoutes);
 
 // Setup Socket.IO
@@ -192,10 +196,50 @@ setInterval(async () => {
   }
 }, 15 * 60 * 1000); // 15 minutes
 
+// Schedule Shiprocket tracking sync every 10 minutes for active shipments
+const webhookController = require("./controllers/webhookController");
+setInterval(async () => {
+  try {
+    const result = await webhookController.syncAllActiveShipments();
+    if (result.synced > 0) {
+      logger.info(
+        `Shiprocket sync: Updated ${result.synced}/${result.total} active shipments`
+      );
+    } else if (result.total > 0) {
+      logger.info(
+        `Shiprocket sync: No updates (${result.total} shipments checked)`
+      );
+    }
+  } catch (error) {
+    logger.error("Error in Shiprocket tracking sync:", error);
+  }
+}, 10 * 60 * 1000); // 10 minutes (production-friendly)
+
+// Initial sync on startup (after 30 seconds delay)
+setTimeout(async () => {
+  try {
+    logger.info("Running initial Shiprocket tracking sync...");
+    const result = await webhookController.syncAllActiveShipments();
+    logger.info(
+      `Initial sync complete: ${result.synced}/${result.total} shipments updated`
+    );
+  } catch (error) {
+    logger.error("Error in initial Shiprocket sync:", error);
+  }
+}, 30000); // 30 seconds after startup
+
 // Connect to database and start server
 connectDb()
-  .then(() => {
+  .then(async () => {
     logger.info("Database connected successfully");
+
+    // Check if database indexes exist (non-blocking warning)
+    try {
+      const ensureIndexes = require("./utils/ensureIndexes");
+      await ensureIndexes();
+    } catch (error) {
+      logger.warn("Index check skipped", { error: error.message });
+    }
   })
   .catch((error) => {
     logger.error("Database connection failed", { error: error.message });

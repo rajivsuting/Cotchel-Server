@@ -101,6 +101,35 @@ if (process.env.NODE_ENV === "development") {
   );
 }
 
+// ============ SHIPPING MANAGEMENT ROUTES ============
+
+// Calculate shipping fee before checkout
+router.post(
+  "/calculate-shipping",
+  authMiddleware.verifyToken,
+  require("../controllers/shippingController").calculateShippingFee
+);
+
+// Seller shipping actions
+router.post(
+  "/:orderId/generate-label",
+  authMiddleware.verifyToken,
+  require("../controllers/shippingController").generateShippingLabel
+);
+
+router.post(
+  "/:orderId/schedule-pickup",
+  authMiddleware.verifyToken,
+  require("../controllers/shippingController").schedulePickup
+);
+
+// Sync shipment tracking from Shiprocket (real-time)
+router.post(
+  "/:orderId/sync-tracking",
+  authMiddleware.verifyToken,
+  require("../controllers/webhookController").syncShipmentTracking
+);
+
 // Get order by ID - MUST be last among GET routes
 router.get("/:id", authMiddleware.verifyToken, orderController.getOrderById);
 

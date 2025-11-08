@@ -151,6 +151,10 @@ exports.createProduct = async (req, res) => {
     console.log("File Attachments saved:", newProduct.fileAttachments);
     console.log("=== END SAVED PRODUCT ===");
 
+    // Invalidate product listing caches (new product added)
+    const cache = require("../services/upstashCache");
+    await cache.delPattern("products:list:*");
+
     res
       .status(201)
       .json({ message: "Product created successfully", product: newProduct });
@@ -208,7 +212,43 @@ exports.getAllProducts = async (req, res) => {
     willFilterBySeller: lastActiveRole === "Seller" && sellerUserId,
   });
 
+  // ===== CACHING STRATEGY =====
+  // Cache for: Buyers and Anonymous users (high hit rate)
+  // Don't cache for: Sellers viewing their own products (user-specific)
+  const shouldCache = lastActiveRole !== "Seller";
+  const cacheKey = shouldCache 
+    ? `products:list:page:${page}:limit:${limit}:cat:${category||'all'}:subcat:${subCategories||'all'}:sort:${sortBy}:${order}:search:${search||'none'}:rating:${ratings||'all'}:minPrice:${minPrice||0}:maxPrice:${maxPrice||999999}:lotSize:${lotSize||'all'}:brands:${brands||'all'}`
+    : null;
+
   try {
+    // Try cache first (for buyers/anonymous)
+    if (shouldCache) {
+      const cache = require("../services/upstashCache");
+      const cachedData = await cache.get(cacheKey);
+      
+      if (cachedData) {
+        console.log(`💾 [CACHE HIT] Products: ${cacheKey}`);
+        
+        // Add wishlist status for logged-in users
+        if (userId) {
+          const Wishlist = require("../models/wishlist");
+          const wishlist = await Wishlist.findOne({ userId }).select("products.productId");
+          if (wishlist) {
+            const wishlistProductIds = new Set(
+              wishlist.products.map((item) => item.productId.toString())
+            );
+            cachedData.products = cachedData.products.map((product) => ({
+              ...product,
+              isWishlisted: wishlistProductIds.has(product._id.toString()),
+            }));
+          }
+        }
+        
+        return res.status(200).json(cachedData);
+      }
+
+      console.log(`🔍 [CACHE MISS] Products: ${cacheKey}`);
+    }
     const filter = {};
 
     if (category) filter.category = category;
@@ -398,13 +438,28 @@ exports.getAllProducts = async (req, res) => {
       }
     }
 
-    res.status(200).json({
+    const responseData = {
       success: true,
       totalProducts: total,
       totalPages: total > 0 ? Math.ceil(total / parsedLimit) : 1,
       currentPage: parsedPage,
       products: productsWithWishlistStatus,
-    });
+    };
+
+    // Cache the response (without user-specific wishlist data)
+    if (shouldCache && cacheKey) {
+      const cache = require("../services/upstashCache");
+      const dataToCache = {
+        success: true,
+        totalProducts: total,
+        totalPages: total > 0 ? Math.ceil(total / parsedLimit) : 1,
+        currentPage: parsedPage,
+        products: products, // Cache without wishlist status (added dynamically)
+      };
+      await cache.set(cacheKey, dataToCache, 300); // 5 minutes TTL
+    }
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error("Error fetching products:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
@@ -586,7 +641,21 @@ exports.getAllProductsForAdmin = async (req, res) => {
 
 exports.getProductById = async (req, res, next) => {
   try {
-    const product = await Product.findById(req.params.id)
+    const productId = req.params.id;
+    const cacheKey = `product:${productId}`;
+
+    // Try cache first
+    const cache = require("../services/upstashCache");
+    const cachedData = await cache.get(cacheKey);
+    
+    if (cachedData) {
+      console.log(`💾 [CACHE HIT] Product: ${productId}`);
+      return res.status(200).json(cachedData);
+    }
+
+    console.log(`🔍 [CACHE MISS] Product: ${productId}`);
+
+    const product = await Product.findById(productId)
       .populate("category", "name")
       .populate("user")
       .populate({
@@ -642,11 +711,16 @@ exports.getProductById = async (req, res, next) => {
     }
     console.log("=== END PRODUCT DATA DEBUG ===");
 
-    res.status(200).json({
+    const responseData = {
       message: "Product retrieved successfully",
       product,
       relatedProducts,
-    });
+    };
+
+    // Cache for 10 minutes (product details don't change often)
+    await cache.set(cacheKey, responseData, 600);
+
+    res.status(200).json(responseData);
   } catch (error) {
     next(error);
   }
@@ -661,7 +735,20 @@ exports.searchProduct = async (req, res) => {
     });
   }
 
+  const cacheKey = `products:search:${searchQuery.toLowerCase().trim()}:limit:10`;
+
   try {
+    // Try cache first
+    const cache = require("../services/upstashCache");
+    const cachedData = await cache.get(cacheKey);
+    
+    if (cachedData) {
+      console.log(`💾 [CACHE HIT] Search: ${searchQuery}`);
+      return res.status(200).json(cachedData);
+    }
+
+    console.log(`🔍 [CACHE MISS] Search: ${searchQuery}`);
+
     // Find users with matching fullName first
     const matchingUsers = await User.find(
       { fullName: { $regex: searchQuery, $options: "i" } },
@@ -689,10 +776,15 @@ exports.searchProduct = async (req, res) => {
       .limit(10)
       .select("title price images featuredImage category sku user");
 
-    res.status(200).json({
+    const responseData = {
       message: "Search results fetched successfully.",
       data: products,
-    });
+    };
+
+    // Cache for 5 minutes (searches are repeated frequently)
+    await cache.set(cacheKey, responseData, 300);
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -898,6 +990,10 @@ exports.deleteProduct = async (req, res) => {
 
     await Product.findByIdAndDelete(productId);
 
+    // Invalidate all product caches
+    const cache = require("../services/upstashCache");
+    await cache.CacheInvalidation.onProductUpdate(productId);
+
     res.status(200).json({ message: "Product deleted successfully" });
   } catch (error) {
     console.error("Error deleting product:", error);
@@ -1027,6 +1123,10 @@ exports.editProduct = async (req, res) => {
         timestamp: new Date().toISOString(),
       });
     }
+
+    // Invalidate all product caches
+    const cache = require("../services/upstashCache");
+    await cache.CacheInvalidation.onProductUpdate(productId);
 
     res.status(200).json({
       success: true,
