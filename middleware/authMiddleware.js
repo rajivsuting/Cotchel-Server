@@ -254,3 +254,54 @@ exports.optionalAuth = async (req, res, next) => {
     next();
   });
 };
+
+/**
+ * Verify either Admin or Client token
+ * Used for endpoints that should be accessible by both admins and users
+ * (e.g., order details that admin needs to view)
+ */
+exports.verifyAnyToken = async (req, res, next) => {
+  const adminToken = req.cookies?.admin_accessToken;
+  const clientToken = req.cookies?.client_accessToken;
+  const legacyToken = req.cookies?.accessToken;
+
+  // Try admin token first
+  let accessToken = adminToken || clientToken || legacyToken;
+  let tokenType = adminToken ? "admin" : "client";
+
+  if (!accessToken) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+
+  jwt.verify(accessToken, process.env.JWT_SECRET, async (err, user) => {
+    if (err) {
+      if (err.name === "TokenExpiredError") {
+        return res.status(401).json({ error: "Token expired", reAuth: true });
+      }
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    try {
+      const User = require("../models/User");
+      const currentUser = await User.findById(user._id).select(
+        "active role lastActiveRole isVerifiedSeller"
+      );
+
+      if (!currentUser || !currentUser.active) {
+        return res.status(403).json({ error: "Account inactive or not found" });
+      }
+
+      req.user = {
+        ...user,
+        role: currentUser.role,
+        lastActiveRole: currentUser.lastActiveRole,
+        isVerifiedSeller: currentUser.isVerifiedSeller,
+      };
+
+      next();
+    } catch (error) {
+      console.error("Error in verifyAnyToken:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+};
