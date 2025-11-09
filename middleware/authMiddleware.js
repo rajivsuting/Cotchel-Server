@@ -144,6 +144,88 @@ exports.restrictTo =
     next();
   };
 
+// Flexible authentication - accepts both admin and client tokens (REQUIRED)
+exports.verifyAnyToken = async (req, res, next) => {
+  const adminToken = req.cookies?.admin_accessToken;
+  const clientToken = req.cookies?.client_accessToken;
+  const legacyToken = req.cookies?.accessToken;
+
+  // Determine if request is from admin dashboard
+  const referer = req.headers.referer || req.headers.origin || "";
+  const isAdminRequest =
+    referer.includes("/admin") ||
+    referer.includes("admin") ||
+    req.headers["x-request-source"] === "admin" ||
+    req.path.startsWith("/admin/");
+
+  // Token selection logic
+  let accessToken = null;
+  let tokenType = null;
+
+  if (adminToken && clientToken) {
+    // Both exist - choose based on request context
+    if (isAdminRequest) {
+      accessToken = adminToken;
+      tokenType = "admin";
+    } else {
+      accessToken = clientToken;
+      tokenType = "client";
+    }
+  } else if (adminToken) {
+    accessToken = adminToken;
+    tokenType = "admin";
+  } else if (clientToken) {
+    accessToken = clientToken;
+    tokenType = "client";
+  } else if (legacyToken) {
+    accessToken = legacyToken;
+    tokenType = "client";
+  }
+
+  if (!accessToken) {
+    return res.status(401).json({ error: "Access token missing" });
+  }
+
+  jwt.verify(accessToken, process.env.JWT_SECRET, async (err, user) => {
+    if (err) {
+      if (err.name === "TokenExpiredError") {
+        return res.status(401).json({ error: "Token expired", reAuth: true });
+      }
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    // Verify user account is active
+    try {
+      const User = require("../models/User");
+      const currentUser = await User.findById(user._id).select(
+        "active role lastActiveRole isVerifiedSeller"
+      );
+
+      if (!currentUser || !currentUser.active) {
+        return res.status(401).json({
+          error: "Account not found or inactive",
+        });
+      }
+
+      // For admin tokens, verify admin role
+      if (tokenType === "admin" && currentUser.role !== "Admin") {
+        return res.status(403).json({ error: "Admin role required" });
+      }
+
+      req.user = {
+        ...user,
+        role: currentUser.role,
+        lastActiveRole: currentUser.lastActiveRole,
+        isVerifiedSeller: currentUser.isVerifiedSeller,
+      };
+      next();
+    } catch (error) {
+      console.error("Error verifying user status:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+};
+
 exports.optionalAuth = async (req, res, next) => {
   const adminToken = req.cookies?.admin_accessToken;
   const clientToken = req.cookies?.client_accessToken;
@@ -252,56 +334,5 @@ exports.optionalAuth = async (req, res, next) => {
     }
 
     next();
-  });
-};
-
-/**
- * Verify either Admin or Client token
- * Used for endpoints that should be accessible by both admins and users
- * (e.g., order details that admin needs to view)
- */
-exports.verifyAnyToken = async (req, res, next) => {
-  const adminToken = req.cookies?.admin_accessToken;
-  const clientToken = req.cookies?.client_accessToken;
-  const legacyToken = req.cookies?.accessToken;
-
-  // Try admin token first
-  let accessToken = adminToken || clientToken || legacyToken;
-  let tokenType = adminToken ? "admin" : "client";
-
-  if (!accessToken) {
-    return res.status(401).json({ error: "Authentication required" });
-  }
-
-  jwt.verify(accessToken, process.env.JWT_SECRET, async (err, user) => {
-    if (err) {
-      if (err.name === "TokenExpiredError") {
-        return res.status(401).json({ error: "Token expired", reAuth: true });
-      }
-      return res.status(401).json({ error: "Invalid token" });
-    }
-
-    try {
-      const User = require("../models/User");
-      const currentUser = await User.findById(user._id).select(
-        "active role lastActiveRole isVerifiedSeller"
-      );
-
-      if (!currentUser || !currentUser.active) {
-        return res.status(403).json({ error: "Account inactive or not found" });
-      }
-
-      req.user = {
-        ...user,
-        role: currentUser.role,
-        lastActiveRole: currentUser.lastActiveRole,
-        isVerifiedSeller: currentUser.isVerifiedSeller,
-      };
-
-      next();
-    } catch (error) {
-      console.error("Error in verifyAnyToken:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
   });
 };

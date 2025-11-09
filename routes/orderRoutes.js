@@ -85,10 +85,10 @@ router.post(
   orderController.handlePaymentCancellation
 );
 
-// Get all orders by payment transaction ID (for multi-seller orders)
+// Get all orders by payment transaction ID (for multi-seller orders - accepts both admin and client tokens)
 router.get(
   "/payment/:paymentTransactionId",
-  authMiddleware.verifyToken,
+  authMiddleware.verifyAnyToken,
   orderController.getOrdersByPaymentTransactionId
 );
 
@@ -130,8 +130,8 @@ router.post(
   require("../controllers/webhookController").syncShipmentTracking
 );
 
-// Get order by ID - MUST be last among GET routes
-router.get("/:id", authMiddleware.verifyToken, orderController.getOrderById);
+// Get order by ID - MUST be last among GET routes (accepts both admin and client tokens)
+router.get("/:id", authMiddleware.verifyAnyToken, orderController.getOrderById);
 
 // ============ ORDER MANAGEMENT ROUTES (Production-Ready) ============
 

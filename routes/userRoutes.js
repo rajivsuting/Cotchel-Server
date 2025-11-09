@@ -117,19 +117,31 @@ router.patch("/edit", authMiddleware.verifyToken, authController.editUser);
 router.post("/request-reset", authController.requestResetLink);
 
 router.post("/reset-password", authController.resetPassword);
-router.get("/all", authController.getAllUsers);
+router.get(
+  "/all",
+  authMiddleware.verifyAdminToken,
+  authController.getAllUsers
+);
 router.get("/get/:id", authController.getUserById);
 router.put(
   "/update/:id",
   authMiddleware.verifyAdminToken,
   authController.updateUser
 );
-router.delete("/delete/:id", authController.deleteUser);
+router.delete(
+  "/delete/:id",
+  authMiddleware.verifyAdminToken,
+  authController.deleteUser
+);
 
 router.get("/google-signin", authController.continueWithGoogle);
 router.post("/resend-otp", authController.resendOTP);
 
-router.get("/pending-sellers", authController.getPendingSellers);
+router.get(
+  "/pending-sellers",
+  authMiddleware.verifyAdminToken,
+  authController.getPendingSellers
+);
 router.patch(
   "/approve-seller/:id",
   authMiddleware.verifyAdminToken,
