@@ -7313,3 +7313,9 @@
 {"timestamp":"2025-11-09 18:59:31","level":"info","message":"Running initial Shiprocket tracking sync...","service":"cotchel-server","environment":"development"}
 {"timestamp":"2025-11-09 18:59:48","level":"info","message":"Server started successfully","service":"cotchel-server","environment":"development","port":"5000"}
 {"timestamp":"2025-11-09 18:59:50","level":"info","message":"Database connected successfully","service":"cotchel-server","environment":"development"}
+{"timestamp":"2025-11-09 19:02:50","level":"info","message":"Server started successfully","service":"cotchel-server","environment":"development","port":"5000"}
+{"timestamp":"2025-11-09 19:02:52","level":"info","message":"Database connected successfully","service":"cotchel-server","environment":"development"}
+{"timestamp":"2025-11-09 19:03:20","level":"info","message":"Running initial Shiprocket tracking sync...","service":"cotchel-server","environment":"development"}
+{"timestamp":"2025-11-09 19:03:24","level":"info","message":"Initial sync complete: 0/11 shipments updated","service":"cotchel-server","environment":"development"}
+{"timestamp":"2025-11-09 19:12:55","level":"info","message":"Shiprocket sync: No updates (11 shipments checked)","service":"cotchel-server","environment":"development"}
+{"timestamp":"2025-11-09 19:33:56","level":"info","message":"Shiprocket sync: No updates (11 shipments checked)","service":"cotchel-server","environment":"development"}

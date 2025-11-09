@@ -1106,9 +1106,16 @@ exports.getAllUsers = async (req, res) => {
     limit = parseInt(limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Filters
-    let filter = {};
-    if (role) filter.role = role;
+    // Filters - exclude admin users from the list
+    let filter = {
+      role: { $ne: "Admin" },
+    };
+
+    // If a specific role is requested, override the default filter
+    if (role) {
+      filter.role = role;
+    }
+
     if (isEmailVerified !== undefined)
       filter.isEmailVerified = isEmailVerified === "true";
 
